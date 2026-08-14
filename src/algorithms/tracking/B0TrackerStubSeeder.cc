@@ -34,14 +34,13 @@
 #include <DD4hep/Detector.h>
 #include <DD4hep/Segmentations.h>
 #include <DDRec/CellIDPositionConverter.h>
-#include <DDSegmentation/BitFieldCoder.h>
 #include <Eigen/Dense>
 #include <edm4eic/Cov6f.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <map>
-#include <set>
+#include <numeric>
 #include <stdexcept>
 #include <vector>
 
@@ -62,10 +61,11 @@ namespace {
 void B0TrackerStubSeeder::init() {
   const auto& geo = algorithms::GeoSvc::instance();
   m_converter     = geo.cellIDPositionConverter();
-  m_decoder       = geo.detector()->readout(m_cfg.readout).segmentation().decoder();
-  m_acts_context  = algorithms::ActsSvc::instance().acts_geometry_provider();
+  // Fail early if this compact has no B0 tracker readout.
+  (void)geo.detector()->readout(m_cfg.readout);
+  m_acts_context = algorithms::ActsSvc::instance().acts_geometry_provider();
 
-  if (m_converter == nullptr || m_decoder == nullptr || m_acts_context == nullptr) {
+  if (m_converter == nullptr || m_acts_context == nullptr) {
     throw std::runtime_error("B0TrackerStubSeeder: required geometry service is unavailable");
   }
 }
@@ -150,14 +150,29 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       continue;
     }
 
-    const std::size_t index = ion.size();
     ion.push_back({global.x() * ca - global.z() * sa, global.y(), global.x() * sa + global.z() * ca,
                    std::move(constituents)});
+  }
 
-    const std::uint64_t cellID = representativeHit.getCellID();
-    const unsigned int layer   = static_cast<unsigned int>(m_decoder->get(cellID, "layer"));
-    const unsigned int station = (layer + 1) / 2;
-    byStation[station].push_back(index);
+  // Group by ion-frame z, not cellID layer. Official B0 uses layer 1-4 for
+  // four disks; the realistic geometry uses layer 1-8 (front/back per disk).
+  // (layer+1)/2 therefore collapses the official detector to two stations
+  // and emits no seeds. Official disks are ~270 mm apart; realistic
+  // front/back faces of one disk are ~7 mm.
+  if (!ion.empty()) {
+    std::vector<std::size_t> order(ion.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
+    unsigned int station = 0;
+    double last_z        = ion[order.front()].z;
+    for (std::size_t idx : order) {
+      if (ion[idx].z - last_z > m_cfg.stationZGap) {
+        ++station;
+      }
+      last_z = ion[idx].z;
+      byStation[station].push_back(idx);
+    }
   }
 
   // The parabola fit needs >= 3 points, so 3 stations is the hard floor

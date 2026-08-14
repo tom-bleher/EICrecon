@@ -35,6 +35,11 @@ struct B0TrackerStubSeederConfig {
   float zFieldEntrance = 5800.0;
 
   // --- seeding logic ---
+  /// Hits whose ion-frame z differs by more than this (mm) are different
+  /// stations. Official B0 disks are ~270 mm apart; realistic front/back
+  /// sensors on one disk are ~7 mm. 50 mm splits the first and merges the
+  /// second, so the same seeder works for 4- and 8-layer geometries.
+  float stationZGap = 50.0;
   /// Minimum number of distinct stations in a seed candidate
   unsigned int minStations = 3;
   /// Cap on hit combinations tried per event

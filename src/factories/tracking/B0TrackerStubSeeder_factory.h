@@ -33,6 +33,8 @@ private:
   ParameterRef<float> m_bFieldY{this, "bFieldY", config().bFieldY, "B0pf dipole field along y [T]"};
   ParameterRef<float> m_zFieldEntrance{this, "zFieldEntrance", config().zFieldEntrance,
                                        "ion-frame z of B0pf field entrance [mm]"};
+  ParameterRef<float> m_stationZGap{this, "stationZGap", config().stationZGap,
+                                    "ion-frame z gap [mm] that starts a new B0 station"};
   ParameterRef<unsigned int> m_minStations{this, "minStations", config().minStations,
                                            "minimum distinct stations per seed"};
   ParameterRef<unsigned int> m_maxCombinations{this, "maxCombinations", config().maxCombinations,

@@ -15,9 +15,6 @@
 #include "algorithms/interfaces/WithPodConfig.h"
 
 namespace dd4hep {
-namespace DDSegmentation {
-  class BitFieldCoder;
-}
 namespace rec {
   class CellIDPositionConverter;
 }
@@ -52,7 +49,6 @@ public:
 
 private:
   const dd4hep::rec::CellIDPositionConverter* m_converter{nullptr};
-  const dd4hep::DDSegmentation::BitFieldCoder* m_decoder{nullptr};
   std::shared_ptr<const ActsGeometryProvider> m_acts_context;
 };
 
