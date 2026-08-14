@@ -32,6 +32,7 @@
 #include "factories/tracking/ActsToTracks_factory.h"
 #include "factories/tracking/ActsTrackMerger_factory.h"
 #include "factories/tracking/AmbiguitySolver_factory.h"
+#include "factories/tracking/B0TrackerStubSeeder_factory.h"
 #include "factories/tracking/CKFTracking_factory.h"
 #include "factories/tracking/IterativeVertexFinder_factory.h"
 #include "factories/tracking/SecondaryVertexFinder_factory.h"
@@ -321,6 +322,7 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFTruthSeededActsTracksUnfiltered",
       },
       {
+          .chi2CutOff         = {100.},
           .numMeasurementsMin = 3,
       },
       app));
@@ -374,15 +376,22 @@ void InitPlugin(JApplication* app) {
       },
       app));
 
-  app->Add(new JOmniFactoryGeneratorT<TrackSeeding_factory>(
-      "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
-      app));
+  // Orthogonal (solenoid) seeding cannot form valid B0 seeds: hits sit at
+  // z ~ 6 m, outside the central-tracker windows, and the helix estimator
+  // assumes Bz. Use a dipole stub seeder instead. See eic/EICrecon#2746.
+  app->Add(new JOmniFactoryGeneratorT<B0TrackerStubSeeder_factory>(
+      "B0TrackerSeeds", {"B0TrackerMeasurements"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"},
+      {}, app));
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTrajectories", {"B0TrackerSeeds", "B0TrackerMeasurements"},
       {
           "B0TrackerCKFActsTrackStatesUnfiltered",
           "B0TrackerCKFActsTracksUnfiltered",
+      },
+      {
+          .chi2CutOff         = {100.},
+          .numMeasurementsMin = 3,
       },
       app));
 
@@ -410,6 +419,9 @@ void InitPlugin(JApplication* app) {
       {
           "B0TrackerCKFActsTrackStates",
           "B0TrackerCKFActsTracks",
+      },
+      {
+          .n_measurements_min = 3,
       },
       app));
 
