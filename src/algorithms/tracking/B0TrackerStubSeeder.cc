@@ -30,6 +30,7 @@
 #include <algorithms/geo.h>
 
 #include <Acts/Definitions/Algebra.hpp>
+#include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <DD4hep/Detector.h>
 #include <DD4hep/Segmentations.h>
@@ -39,6 +40,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -51,6 +53,11 @@ namespace {
   struct StubCandidate {
     std::vector<std::size_t> hitIndices;
     double chi2{0.0};
+    double rmsX{0.0};
+    double rmsY{0.0};
+    double fieldY{0.0};
+    double momentum{0.0};
+    int inferredCharge{0};
     // ion-frame fit results
     double c0{0}, c1{0}, c2{0}; // x'(z') = c0 + c1 z' + c2 z'^2
     double b0{0}, b1{0};        // y'(z') = b0 + b1 z'
@@ -183,6 +190,12 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     return;
   }
 
+  // Sample the same ACTS/DD4hep field provider used by CKFTracking.  The B0
+  // field has a dipole component and a gradient, so an analytic nominal B is
+  // not portable across beam-energy configurations or hit positions.
+  const auto fieldProvider = m_acts_context->getFieldProvider();
+  auto fieldCache = fieldProvider->makeCache(m_acts_context->getActsMagneticFieldContext());
+
   // ------------------------------------------------------------------
   // Enumerate candidates: one hit per station, capped combinatorics.
   // In addition to the full station set, try leave-one-station-out
@@ -222,52 +235,119 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     cand.hitIndices = idxs;
 
     const std::size_t n = idxs.size();
-    // parabola fit x'(z') via 3x3 normal equations
-    Eigen::Matrix3d A  = Eigen::Matrix3d::Zero();
-    Eigen::Vector3d bx = Eigen::Vector3d::Zero();
-    // line fit y'(z') via 2x2
-    double s0 = n, s1 = 0, s2 = 0, sy = 0, syz = 0;
-
+    // Centre and scale z before fitting.  B0 measurements sit near z=6 m;
+    // fitting powers through z^4 in normal equations is needlessly ill
+    // conditioned.  QR on u=(z-zRef)/zScale gives the same polynomial with
+    // stable coefficients.
+    double zRef = 0.0;
     for (std::size_t idx : idxs) {
-      const double z  = ion[idx].z;
-      const double x  = ion[idx].x;
-      const double y  = ion[idx].y;
-      const double z2 = z * z;
-      A(0, 0) += 1.0;
-      A(0, 1) += z;
-      A(0, 2) += z2;
-      A(1, 2) += z * z2;
-      A(2, 2) += z2 * z2;
-      bx(0) += x;
-      bx(1) += x * z;
-      bx(2) += x * z2;
-      s1 += z;
-      s2 += z2;
-      sy += y;
-      syz += y * z;
+      zRef += ion[idx].z;
     }
-    A(1, 0) = A(0, 1);
-    A(1, 1) = A(0, 2);
-    A(2, 0) = A(0, 2);
-    A(2, 1) = A(1, 2);
+    zRef /= static_cast<double>(n);
+    double zScale = 0.0;
+    for (std::size_t idx : idxs) {
+      zScale = std::max(zScale, std::abs(ion[idx].z - zRef));
+    }
+    if (!(zScale > 0.0)) {
+      cand.c0 = std::numeric_limits<double>::quiet_NaN();
+      return cand;
+    }
 
-    const Eigen::Vector3d c = A.fullPivLu().solve(bx);
-    cand.c0                 = c(0);
-    cand.c1                 = c(1);
-    cand.c2                 = c(2);
+    Eigen::MatrixXd designX(n, 3);
+    Eigen::MatrixXd designY(n, 2);
+    Eigen::VectorXd valuesX(n);
+    Eigen::VectorXd valuesY(n);
+    for (std::size_t row = 0; row < n; ++row) {
+      const auto idx   = idxs[row];
+      const double u   = (ion[idx].z - zRef) / zScale;
+      designX(row, 0)  = 1.0;
+      designX(row, 1)  = u;
+      designX(row, 2)  = u * u;
+      valuesX(row)     = ion[idx].x;
+      designY(row, 0)  = 1.0;
+      designY(row, 1)  = u;
+      valuesY(row)     = ion[idx].y;
+    }
+    const Eigen::Vector3d ax = designX.colPivHouseholderQr().solve(valuesX);
+    const Eigen::Vector2d ay = designY.colPivHouseholderQr().solve(valuesY);
 
-    const double det = s0 * s2 - s1 * s1;
-    cand.b1          = (s0 * syz - s1 * sy) / det;
-    cand.b0          = (sy - cand.b1 * s1) / s0;
+    // Convert x=a0+a1*u+a2*u^2 and y=b0+b1*u back to the coefficient
+    // convention used by the downstream field and perigee calculations.
+    cand.c2 = ax(2) / (zScale * zScale);
+    cand.c1 = ax(1) / zScale - 2.0 * zRef * cand.c2;
+    cand.c0 = ax(0) - ax(1) * zRef / zScale + ax(2) * zRef * zRef / (zScale * zScale);
+    cand.b1 = ay(1) / zScale;
+    cand.b0 = ay(0) - ay(1) * zRef / zScale;
 
+    double sumRx2 = 0.0;
+    double sumRy2 = 0.0;
     for (std::size_t idx : idxs) {
       const double z  = ion[idx].z;
       const double rx = ion[idx].x - (cand.c0 + cand.c1 * z + cand.c2 * z * z);
       const double ry = ion[idx].y - (cand.b0 + cand.b1 * z);
-      cand.chi2 += rx * rx + ry * ry;
+      sumRx2 += rx * rx;
+      sumRy2 += ry * ry;
     }
-    cand.chi2 /= static_cast<double>(n);
+    cand.rmsX = std::sqrt(sumRx2 / static_cast<double>(n));
+    cand.rmsY = std::sqrt(sumRy2 / static_cast<double>(n));
+    cand.chi2 = cand.rmsX * cand.rmsX + cand.rmsY * cand.rmsY;
     return cand;
+  };
+
+  auto makeCompatible = [&](StubCandidate& cand) -> bool {
+    if (!(std::isfinite(cand.chi2) && std::isfinite(cand.c1) && std::isfinite(cand.c2) &&
+          std::isfinite(cand.b0) && std::isfinite(cand.b1)) ||
+        cand.rmsX > m_cfg.maxXResidual || cand.rmsY > m_cfg.maxYResidual) {
+      return false;
+    }
+
+    const auto zMinMax = std::minmax_element(
+        cand.hitIndices.begin(), cand.hitIndices.end(),
+        [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
+    const double zFirst = ion[*zMinMax.first].z;
+    const double zLast  = ion[*zMinMax.second].z;
+    const double txFirst = cand.c1 + 2.0 * cand.c2 * zFirst;
+    if (std::abs(txFirst) > m_cfg.maxAbsTransverseSlope ||
+        std::abs(cand.b1) > m_cfg.maxAbsTransverseSlope) {
+      return false;
+    }
+
+    const unsigned int nSamples = std::max(1u, m_cfg.fieldSamples);
+    double sumBy = 0.0;
+    unsigned int nField = 0;
+    for (unsigned int i = 0; i < nSamples; ++i) {
+      const double f = nSamples == 1 ? 0.5 : static_cast<double>(i) / (nSamples - 1);
+      const double z = zFirst + f * (zLast - zFirst);
+      const double x = cand.c0 + cand.c1 * z + cand.c2 * z * z;
+      const double y = cand.b0 + cand.b1 * z;
+      const Acts::Vector3 global{x * ca + z * sa, y, -x * sa + z * ca};
+      const auto field = fieldProvider->getField(global, fieldCache);
+      if (!field.ok() || !field.value().allFinite()) {
+        continue;
+      }
+      sumBy += field.value().y() / Acts::UnitConstants::T;
+      ++nField;
+    }
+    if (nField == 0) {
+      return false;
+    }
+    cand.fieldY = sumBy / static_cast<double>(nField);
+    if (!std::isfinite(cand.fieldY) || std::abs(cand.fieldY) < m_cfg.minAbsFieldY) {
+      return false;
+    }
+
+    // For a track travelling in +z, d(tx)/dz = -q * 0.2998e-3 * By / p.
+    const double kappa = 2.0 * cand.c2;
+    if (!std::isfinite(kappa) || std::abs(kappa) < 1.0e-12) {
+      return false;
+    }
+    cand.momentum = 2.998e-4 * std::abs(cand.fieldY) / std::abs(kappa);
+    if (!std::isfinite(cand.momentum) || cand.momentum < m_cfg.pMin ||
+        cand.momentum > m_cfg.pMax) {
+      return false;
+    }
+    cand.inferredCharge = kappa * cand.fieldY > 0.0 ? -1 : 1;
+    return true;
   };
 
   for (const auto& stationHits : subsets) {
@@ -280,8 +360,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         idxs.push_back(stationHits[s][cursor[s]]);
       }
       StubCandidate cand = fitCandidate(idxs);
-      if (std::isfinite(cand.chi2) && std::isfinite(cand.c1) && std::isfinite(cand.c2) &&
-          std::isfinite(cand.b0) && std::isfinite(cand.b1)) {
+      if (makeCompatible(cand)) {
         candidates.push_back(std::move(cand));
       }
       ++tried;
@@ -346,17 +425,12 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // ------------------------------------------------------------------
   // Convert accepted candidates to origin-perigee seed parameters.
   // ------------------------------------------------------------------
+  unsigned int emitted = 0;
   for (const auto* cand : accepted) {
-    // momentum from the parabola curvature: dtx/dz = kappa = q*0.2998e-3*B/p
-    // (p in GeV, B in T, z in mm)
-    const double kappa = 2.0 * cand->c2;
-    double p           = m_cfg.momentumPrior;
-    if (std::isfinite(kappa) && std::abs(kappa) > 0.0) {
-      const double pFit = 2.998e-4 * m_cfg.bFieldY / std::abs(kappa);
-      if (std::isfinite(pFit) && pFit > m_cfg.pMin && pFit < m_cfg.pMax) {
-        p = pFit;
-      }
+    if (emitted >= m_cfg.maxSeeds) {
+      break;
     }
+    const double p = cand->momentum;
 
     // state at the field entrance (ion frame)
     const double zIn  = m_cfg.zFieldEntrance;
@@ -414,36 +488,52 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const double loc0 = -xPca * std::sin(phi) + yPca * std::cos(phi);
     const double loc1 = zPca;
 
-    auto trackparam = track_params_output->create();
-    trackparam.setType(-1); // seed
-    trackparam.setLoc({static_cast<float>(loc0), static_cast<float>(loc1)});
-    trackparam.setPhi(static_cast<float>(phi));
-    trackparam.setTheta(static_cast<float>(theta));
-    trackparam.setQOverP(static_cast<float>(m_cfg.charge / p));
-    trackparam.setTime(10);
-
-    edm4eic::Cov6f cov;
-    cov(0, 0) = m_cfg.locaError;
-    cov(1, 1) = m_cfg.locbError;
-    cov(2, 2) = m_cfg.phiError;
-    cov(3, 3) = m_cfg.thetaError;
-    cov(4, 4) = m_cfg.qOverPError;
-    cov(5, 5) = m_cfg.timeError;
-    trackparam.setCovariance(cov);
-
-    auto seed = seeds->create();
-    seed.setPerigee({0.f, 0.f, 0.f});
-    // Larger is better for ACTS seed quality; use the negative mean residual.
-    seed.setQuality(static_cast<float>(-cand->chi2));
-    seed.setParams(trackparam);
-    for (std::size_t idx : cand->hitIndices) {
-      for (const auto& hit : ion[idx].constituents) {
-        seed.addToHits(hit);
-      }
+    std::vector<int> charges;
+    if (m_cfg.testBothCharges) {
+      charges = {-1, 1};
+    } else if (m_cfg.charge == -1 || m_cfg.charge == 1) {
+      charges = {m_cfg.charge};
+    } else {
+      charges = {cand->inferredCharge};
     }
 
-    trace("B0 stub seed: p={:.2f} GeV theta={:.4f} phi={:.3f} loc=({:.2f},{:.2f}) chi2={:.4f}", p,
-          theta, phi, loc0, loc1, cand->chi2);
+    for (const int charge : charges) {
+      if (emitted >= m_cfg.maxSeeds) {
+        break;
+      }
+      auto trackparam = track_params_output->create();
+      trackparam.setType(-1); // seed
+      trackparam.setLoc({static_cast<float>(loc0), static_cast<float>(loc1)});
+      trackparam.setPhi(static_cast<float>(phi));
+      trackparam.setTheta(static_cast<float>(theta));
+      trackparam.setQOverP(static_cast<float>(charge / p));
+      trackparam.setTime(10);
+
+      edm4eic::Cov6f cov;
+      cov(0, 0) = m_cfg.locaError;
+      cov(1, 1) = m_cfg.locbError;
+      cov(2, 2) = m_cfg.phiError;
+      cov(3, 3) = m_cfg.thetaError;
+      cov(4, 4) = m_cfg.qOverPError;
+      cov(5, 5) = m_cfg.timeError;
+      trackparam.setCovariance(cov);
+
+      auto seed = seeds->create();
+      seed.setPerigee({0.f, 0.f, 0.f});
+      // Larger is better for ACTS seed quality; use the negative mean residual.
+      seed.setQuality(static_cast<float>(-cand->chi2));
+      seed.setParams(trackparam);
+      for (std::size_t idx : cand->hitIndices) {
+        for (const auto& hit : ion[idx].constituents) {
+          seed.addToHits(hit);
+        }
+      }
+      ++emitted;
+
+      trace("B0 stub seed: q={} p={:.2f} GeV By={:.3f} T theta={:.4f} phi={:.3f} "
+            "loc=({:.2f},{:.2f}) rms=({:.3f},{:.3f})",
+            charge, p, cand->fieldY, theta, phi, loc0, loc1, cand->rmsX, cand->rmsY);
+    }
   }
 }
 

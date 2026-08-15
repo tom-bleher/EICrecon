@@ -21,18 +21,20 @@ struct B0TrackerStubSeederConfig {
   /// DD4hep readout used to decode the B0 layer field.
   std::string readout = "B0TrackerHits";
 
-  // --- geometry / field (defaults match the analytic B0pf description) ---
+  // --- geometry / field ---
   /// Ion-beam rotation about y (rad); B0 hits are fitted in this rotated frame
   float crossingAngle = -0.025;
-  /// B0pf dipole field along y (T), analytic MultipoleMagnet value for the
-  /// nominal 5x41 beamline. NOTE (pre-upstream TODO): the applied field is
-  /// B0PF_Bmax * FieldScaleFactor, and FieldScaleFactor is ~0.30 for the
-  /// light-ion beamline configs -- this should be read from the DD4hep field
-  /// provider (as CKFTracking does) instead of configured.
-  float bFieldY = 1.184;
-  /// Ion-frame z where the B0pf field region starts (mm); trajectory is
-  /// treated as straight upstream of this plane
+  /// The dipole field is sampled from the ACTS/DD4hep field provider along
+  /// each fitted candidate. This is only a guard against a zero-field query,
+  /// not an analytic B0 field substitute.
+  float minAbsFieldY = 0.05;
+  /// Ion-frame z where the B0pf field region starts (mm), used only for the
+  /// origin-constrained upstream chord. Momentum always uses the sampled ACTS
+  /// field at the fitted candidate.
   float zFieldEntrance = 5800.0;
+  /// Number of ACTS field samples between the innermost and outermost selected
+  /// B0 stations. A single sample is allowed for a uniform-field test.
+  unsigned int fieldSamples = 5;
 
   // --- seeding logic ---
   /// Hits whose ion-frame z differs by more than this (mm) are different
@@ -46,18 +48,28 @@ struct B0TrackerStubSeederConfig {
   unsigned int maxCombinations = 512;
   /// Maximum seeds emitted per event (after overlap deduplication)
   unsigned int maxSeeds = 20;
-  /// Two accepted seeds may share at most this many hits. 3 lets a
-  /// leave-one-out subset seed coexist with its parent full-station seed.
-  unsigned int maxSharedHits = 3;
-  /// Assumed charge (outgoing hadron side). The fitted curvature sign is
-  /// currently not used to determine charge; tracks bending opposite to this
-  /// assumption will not be reconstructed.
-  int charge = 1;
-  /// Fallback |p| (GeV) when the sagitta fit is unusable
-  float momentumPrior = 41.0;
-  /// Accept window for the fitted momentum (GeV); outside -> momentumPrior
+  /// Two accepted seeds may share at most this many hits. Keeping this below
+  /// three prevents leave-one-out subsets from duplicating their parent seed.
+  unsigned int maxSharedHits = 2;
+  /// Charge policy: 0 infers the sign from fitted curvature and sampled By;
+  /// +1 or -1 forces a diagnostic hypothesis.
+  int charge = 0;
+  /// Emit both charge hypotheses for every compatible candidate. Intended for
+  /// validation of opposite-sign tracks; normal reconstruction infers one.
+  bool testBothCharges = false;
+  /// Accepted range for the field-aware fitted momentum [GeV]. Candidates
+  /// outside this range are rejected rather than assigned a nominal momentum.
   float pMin = 3.0;
   float pMax = 400.0;
+
+  // --- compatibility and ranking ---
+  /// Maximum RMS residual of the y(z) straight-line fit [mm]. This rejects
+  /// cross-station combinations that cannot be one telescope trajectory.
+  float maxYResidual = 0.5;
+  /// Maximum RMS residual of the x(z) parabola fit [mm].
+  float maxXResidual = 2.0;
+  /// Maximum absolute transverse slope at the first selected station.
+  float maxAbsTransverseSlope = 0.10;
 
   /// Constrain the seed to the beamline: direction from the chord
   /// origin -> field-entrance point, loc = (0,0) with beam-spot covariance.

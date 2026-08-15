@@ -30,9 +30,12 @@ private:
                                       "DD4hep readout used to decode B0 layers"};
   ParameterRef<float> m_crossingAngle{this, "crossingAngle", config().crossingAngle,
                                       "ion-beam rotation about y [rad]"};
-  ParameterRef<float> m_bFieldY{this, "bFieldY", config().bFieldY, "B0pf dipole field along y [T]"};
+  ParameterRef<float> m_minAbsFieldY{this, "minAbsFieldY", config().minAbsFieldY,
+                                     "minimum |By| from the ACTS field provider [T]"};
   ParameterRef<float> m_zFieldEntrance{this, "zFieldEntrance", config().zFieldEntrance,
                                        "ion-frame z of B0pf field entrance [mm]"};
+  ParameterRef<unsigned int> m_fieldSamples{this, "fieldSamples", config().fieldSamples,
+                                            "ACTS field samples per fitted candidate"};
   ParameterRef<float> m_stationZGap{this, "stationZGap", config().stationZGap,
                                     "ion-frame z gap [mm] that starts a new B0 station"};
   ParameterRef<unsigned int> m_minStations{this, "minStations", config().minStations,
@@ -43,14 +46,22 @@ private:
                                         "maximum seeds per event"};
   ParameterRef<unsigned int> m_maxSharedHits{this, "maxSharedHits", config().maxSharedHits,
                                              "max shared hits between accepted seeds"};
-  ParameterRef<int> m_charge{this, "charge", config().charge, "assumed charge"};
+  ParameterRef<int> m_charge{this, "charge", config().charge,
+                             "0=infer charge, +/-1=force a diagnostic charge hypothesis"};
+  ParameterRef<bool> m_testBothCharges{this, "testBothCharges", config().testBothCharges,
+                                       "emit both charge hypotheses for each candidate"};
   ParameterRef<bool> m_constrainToBeamline{this, "constrainToBeamline",
                                            config().constrainToBeamline,
                                            "use origin->field-entrance chord for the direction"};
-  ParameterRef<float> m_momentumPrior{this, "momentumPrior", config().momentumPrior,
-                                      "fallback momentum [GeV]"};
   ParameterRef<float> m_pMin{this, "pMin", config().pMin, "min accepted fitted momentum [GeV]"};
   ParameterRef<float> m_pMax{this, "pMax", config().pMax, "max accepted fitted momentum [GeV]"};
+  ParameterRef<float> m_maxYResidual{this, "maxYResidual", config().maxYResidual,
+                                      "max RMS y(z) compatibility residual [mm]"};
+  ParameterRef<float> m_maxXResidual{this, "maxXResidual", config().maxXResidual,
+                                      "max RMS x(z) compatibility residual [mm]"};
+  ParameterRef<float> m_maxAbsTransverseSlope{this, "maxAbsTransverseSlope",
+                                                config().maxAbsTransverseSlope,
+                                                "max transverse slope at first B0 station"};
   ParameterRef<float> m_locaError{this, "locaError", config().locaError, "seed loc0 error"};
   ParameterRef<float> m_locbError{this, "locbError", config().locbError, "seed loc1 error"};
   ParameterRef<float> m_phiError{this, "phiError", config().phiError, "seed phi error"};

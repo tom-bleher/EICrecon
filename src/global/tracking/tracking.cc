@@ -322,7 +322,8 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFTruthSeededActsTracksUnfiltered",
       },
       {
-          .chi2CutOff         = {100.},
+          // Keep the B0 telescope exception of three measurements, while
+          // inheriting the framework CKF chi2 default (15).
           .numMeasurementsMin = 3,
       },
       app));
@@ -390,7 +391,9 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFActsTracksUnfiltered",
       },
       {
-          .chi2CutOff         = {100.},
+          // Use the framework CKF default (chi2CutOff = 15). The B0 stub
+          // seeder has its own compatibility ranking; a looser CKF cut must
+          // be justified by a dedicated background/fake-rate study.
           .numMeasurementsMin = 3,
       },
       app));
