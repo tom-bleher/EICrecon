@@ -18,70 +18,166 @@
 //      straight line to the origin; express the result on the origin perigee
 //      surface, which is what CKFTracking hard-codes as seed reference.
 //
-// The truth-seeded chain reconstructs these tracks at 84.6% band efficiency
-// from exactly such origin-perigee parameters, so approximate stub seeds are
-// sufficient; the CKF does the rest.
+// The seed is only a starting point: the CKF refits with the full field and
+// material, so the stub momentum must not be read as a measurement. Because
+// the seed is expressed at the origin it is a prompt-track solution; see
+// constrainToBeamline in the config for why displaced decays need more.
 
 #include "B0TrackerStubSeeder.h"
 
-#include "algorithms/interfaces/ActsSvc.h"
-#include "algorithms/tracking/ActsGeometryProvider.h"
-
-#include <algorithms/geo.h>
-
 #include <Acts/Definitions/Algebra.hpp>
+#include <Acts/Definitions/Units.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
-#include <Acts/Surfaces/Surface.hpp>
-#include <DD4hep/Detector.h>
-#include <DD4hep/Segmentations.h>
-#include <DDRec/CellIDPositionConverter.h>
 #include <Eigen/Dense>
 #include <edm4eic/Cov6f.h>
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
-#include <limits>
+#include <cstddef>
 #include <map>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
+#include "algorithms/interfaces/ActsSvc.h"
+
 namespace eicrecon {
+
+namespace b0stub {
+
+  StubFit fitStub(const std::vector<Point3>& pts) {
+    StubFit fit;
+    const std::size_t n = pts.size();
+    if (n < 3) {
+      return fit;
+    }
+
+    // Centre and scale z before fitting. B0 measurements sit near z = 6 m;
+    // fitting powers through z^4 in normal equations is needlessly ill
+    // conditioned. QR on u = (z - zRef)/zScale gives the same polynomial with
+    // stable coefficients.
+    double zRef = 0.0;
+    for (const auto& p : pts) {
+      zRef += p.z;
+    }
+    zRef /= static_cast<double>(n);
+    double zScale = 0.0;
+    for (const auto& p : pts) {
+      zScale = std::max(zScale, std::abs(p.z - zRef));
+    }
+    if (!(zScale > 0.0)) {
+      return fit;
+    }
+
+    Eigen::MatrixXd designX(n, 3);
+    Eigen::MatrixXd designY(n, 2);
+    Eigen::VectorXd valuesX(n);
+    Eigen::VectorXd valuesY(n);
+    for (std::size_t row = 0; row < n; ++row) {
+      const double u  = (pts[row].z - zRef) / zScale;
+      designX(row, 0) = 1.0;
+      designX(row, 1) = u;
+      designX(row, 2) = u * u;
+      valuesX(row)    = pts[row].x;
+      designY(row, 0) = 1.0;
+      designY(row, 1) = u;
+      valuesY(row)    = pts[row].y;
+    }
+    const Eigen::Vector3d ax = designX.colPivHouseholderQr().solve(valuesX);
+    const Eigen::Vector2d ay = designY.colPivHouseholderQr().solve(valuesY);
+
+    // Convert back from the shifted/scaled variable to plain powers of z.
+    fit.c2 = ax(2) / (zScale * zScale);
+    fit.c1 = ax(1) / zScale - 2.0 * zRef * fit.c2;
+    fit.c0 = ax(0) - ax(1) * zRef / zScale + ax(2) * zRef * zRef / (zScale * zScale);
+    fit.b1 = ay(1) / zScale;
+    fit.b0 = ay(0) - ay(1) * zRef / zScale;
+
+    double sumRx2 = 0.0;
+    double sumRy2 = 0.0;
+    for (const auto& p : pts) {
+      const double rx = p.x - fit.x(p.z);
+      const double ry = p.y - fit.y(p.z);
+      sumRx2 += rx * rx;
+      sumRy2 += ry * ry;
+    }
+    fit.rmsX = std::sqrt(sumRx2 / static_cast<double>(n));
+    fit.rmsY = std::sqrt(sumRy2 / static_cast<double>(n));
+
+    fit.valid = std::isfinite(fit.c0) && std::isfinite(fit.c1) && std::isfinite(fit.c2) &&
+                std::isfinite(fit.b0) && std::isfinite(fit.b1) && std::isfinite(fit.rmsX) &&
+                std::isfinite(fit.rmsY);
+    return fit;
+  }
+
+  double momentumFromCurvature(double c2, double fieldY) {
+    // For a track travelling in +z, d(tx)/dz = -q * 0.2998e-3 * By / p, with z
+    // in mm, By in T and p in GeV.
+    const double kappa = 2.0 * c2;
+    if (!std::isfinite(kappa) || std::abs(kappa) < 1.0e-12) {
+      return 0.0;
+    }
+    return 2.998e-4 * std::abs(fieldY) / std::abs(kappa);
+  }
+
+  int chargeFromCurvature(double c2, double fieldY) { return 2.0 * c2 * fieldY > 0.0 ? -1 : 1; }
+
+  PerigeeParams perigeeFromRay(const Point3& ref, const Point3& dir, const Point3& perigee) {
+    PerigeeParams out;
+
+    const double dnorm = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    if (!(dnorm > 0.0)) {
+      return out;
+    }
+    const double dx = dir.x / dnorm;
+    const double dy = dir.y / dnorm;
+    const double dz = dir.z / dnorm;
+
+    // Point of closest approach to the perigee line (parallel to z through
+    // `perigee`), measured from `ref`.
+    const double rx    = ref.x - perigee.x;
+    const double ry    = ref.y - perigee.y;
+    const double denom = dx * dx + dy * dy;
+    const double t     = denom > 0.0 ? -(rx * dx + ry * dy) / denom : 0.0;
+
+    const double xPca = rx + t * dx;
+    const double yPca = ry + t * dy;
+    const double zPca = ref.z + t * dz - perigee.z;
+
+    out.phi   = std::atan2(dy, dx);
+    out.theta = std::acos(std::clamp(dz, -1.0, 1.0));
+    // ACTS perigee local frame: loc0 = signed transverse impact, loc1 = z
+    out.loc0 = -xPca * std::sin(out.phi) + yPca * std::cos(out.phi);
+    out.loc1 = zPca;
+    return out;
+  }
+
+} // namespace b0stub
 
 namespace {
 
   struct StubCandidate {
     std::vector<std::size_t> hitIndices;
-    double chi2{0.0};
-    double rmsX{0.0};
-    double rmsY{0.0};
+    b0stub::StubFit fit;
     double fieldY{0.0};
     double momentum{0.0};
     int inferredCharge{0};
-    // ion-frame fit results
-    double c0{0}, c1{0}, c2{0}; // x'(z') = c0 + c1 z' + c2 z'^2
-    double b0{0}, b1{0};        // y'(z') = b0 + b1 z'
   };
 
 } // namespace
 
 void B0TrackerStubSeeder::init() {
-  const auto& geo = algorithms::GeoSvc::instance();
-  m_converter     = geo.cellIDPositionConverter();
-  // Fail early if this compact has no B0 tracker readout.
-  (void)geo.detector()->readout(m_cfg.readout);
   m_acts_context = algorithms::ActsSvc::instance().acts_geometry_provider();
-
-  if (m_converter == nullptr || m_acts_context == nullptr) {
-    throw std::runtime_error("B0TrackerStubSeeder: required geometry service is unavailable");
+  if (m_acts_context == nullptr) {
+    throw std::runtime_error("B0TrackerStubSeeder: ACTS geometry service is unavailable");
   }
 }
 
 void B0TrackerStubSeeder::process(const Input& input, const Output& output) const {
-  const auto [measurements]         = input;
+  const auto [hits]                 = input;
   auto [seeds, track_params_output] = output;
 
-  if (measurements->empty()) {
+  if (hits->empty()) {
     return;
   }
 
@@ -89,76 +185,25 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   const double sa = std::sin(m_cfg.crossingAngle);
 
   // ------------------------------------------------------------------
-  // Transform fitted measurement positions to global coordinates, rotate them
-  // into the ion frame, and group them by station. Constituent TrackerHits are
-  // retained so TrackSeed truth relations remain complete.
+  // Rotate hit positions into the ion frame and group them by station.
   // ------------------------------------------------------------------
-  struct IonHit {
-    double x, y, z;
-    std::vector<edm4eic::TrackerHit> constituents;
-  };
-  std::vector<IonHit> ion;
-  ion.reserve(measurements->size());
-  std::map<unsigned int, std::vector<std::size_t>> byStation;
+  std::vector<b0stub::Point3> ion;
+  ion.reserve(hits->size());
+  std::vector<edm4eic::TrackerHit> ionHits;
+  ionHits.reserve(hits->size());
 
-  const auto& surfaceMap = m_acts_context->surfaceMap();
-  const auto& gctx       = m_acts_context->getActsGeometryContext();
-
-  for (const auto& measurement : *measurements) {
-    const auto relatedHits = measurement.getHits();
-    const auto weights     = measurement.getWeights();
-    if (relatedHits.empty() || weights.size() != relatedHits.size()) {
-      warning("Skipping B0 measurement with {} hits and {} weights", relatedHits.size(),
-              weights.size());
+  for (const auto& hit : *hits) {
+    const auto& p = hit.getPosition();
+    const b0stub::Point3 q{p.x * ca - p.z * sa, p.y, p.x * sa + p.z * ca};
+    if (!(std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z))) {
+      debug("Skipping B0 hit with non-finite position");
       continue;
     }
-
-    const auto maxWeight = std::max_element(weights.begin(), weights.end());
-    const std::size_t representativeIndex =
-        static_cast<std::size_t>(std::distance(weights.begin(), maxWeight));
-    const auto representativeHit = relatedHits[representativeIndex];
-    const auto* context          = m_converter->findContext(representativeHit.getCellID());
-    if (context == nullptr) {
-      warning("No DD4hep context for B0 measurement constituent {:#018x}",
-              representativeHit.getCellID());
-      continue;
-    }
-
-    bool mixedSensors = false;
-    std::vector<edm4eic::TrackerHit> constituents;
-    constituents.reserve(relatedHits.size());
-    for (const auto& hit : relatedHits) {
-      const auto* hitContext = m_converter->findContext(hit.getCellID());
-      if (hitContext == nullptr || hitContext->identifier != context->identifier) {
-        mixedSensors = true;
-        break;
-      }
-      constituents.push_back(hit);
-    }
-    if (mixedSensors) {
-      warning("Skipping B0 measurement whose constituent hits span multiple sensors");
-      continue;
-    }
-
-    const auto surfaceIt = surfaceMap.find(context->identifier);
-    if (surfaceIt == surfaceMap.end() ||
-        surfaceIt->second->geometryId().value() != measurement.getSurface()) {
-      warning("B0 measurement surface does not match constituent sensor {:#018x}",
-              context->identifier);
-      continue;
-    }
-
-    const auto loc = measurement.getLoc();
-    const Acts::Vector2 local{loc.a, loc.b};
-    const Acts::Vector3 global =
-        surfaceIt->second->localToGlobal(gctx, local, Acts::Vector3::Zero());
-    if (!global.allFinite()) {
-      warning("Skipping B0 measurement with non-finite global position");
-      continue;
-    }
-
-    ion.push_back({global.x() * ca - global.z() * sa, global.y(), global.x() * sa + global.z() * ca,
-                   std::move(constituents)});
+    ion.push_back(q);
+    ionHits.push_back(hit);
+  }
+  if (ion.empty()) {
+    return;
   }
 
   // Group by ion-frame z, not cellID layer. Official B0 uses layer 1-4 for
@@ -166,7 +211,8 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // (layer+1)/2 therefore collapses the official detector to two stations
   // and emits no seeds. Official disks are ~270 mm apart; realistic
   // front/back faces of one disk are ~7 mm.
-  if (!ion.empty()) {
+  std::map<unsigned int, std::vector<std::size_t>> byStation;
+  {
     std::vector<std::size_t> order(ion.size());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(),
@@ -190,7 +236,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     return;
   }
 
-  // Sample the same ACTS/DD4hep field provider used by CKFTracking.  The B0
+  // Sample the same ACTS/DD4hep field provider used by CKFTracking. The B0
   // field has a dipole component and a gradient, so an analytic nominal B is
   // not portable across beam-energy configurations or hit positions.
   const auto fieldProvider = m_acts_context->getFieldProvider();
@@ -230,96 +276,30 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   const unsigned int perSubsetBudget =
       std::max(1u, m_cfg.maxCombinations / static_cast<unsigned int>(subsets.size()));
 
-  auto fitCandidate = [&](const std::vector<std::size_t>& idxs) -> StubCandidate {
-    StubCandidate cand;
-    cand.hitIndices = idxs;
-
-    const std::size_t n = idxs.size();
-    // Centre and scale z before fitting.  B0 measurements sit near z=6 m;
-    // fitting powers through z^4 in normal equations is needlessly ill
-    // conditioned.  QR on u=(z-zRef)/zScale gives the same polynomial with
-    // stable coefficients.
-    double zRef = 0.0;
-    for (std::size_t idx : idxs) {
-      zRef += ion[idx].z;
-    }
-    zRef /= static_cast<double>(n);
-    double zScale = 0.0;
-    for (std::size_t idx : idxs) {
-      zScale = std::max(zScale, std::abs(ion[idx].z - zRef));
-    }
-    if (!(zScale > 0.0)) {
-      cand.c0 = std::numeric_limits<double>::quiet_NaN();
-      return cand;
-    }
-
-    Eigen::MatrixXd designX(n, 3);
-    Eigen::MatrixXd designY(n, 2);
-    Eigen::VectorXd valuesX(n);
-    Eigen::VectorXd valuesY(n);
-    for (std::size_t row = 0; row < n; ++row) {
-      const auto idx   = idxs[row];
-      const double u   = (ion[idx].z - zRef) / zScale;
-      designX(row, 0)  = 1.0;
-      designX(row, 1)  = u;
-      designX(row, 2)  = u * u;
-      valuesX(row)     = ion[idx].x;
-      designY(row, 0)  = 1.0;
-      designY(row, 1)  = u;
-      valuesY(row)     = ion[idx].y;
-    }
-    const Eigen::Vector3d ax = designX.colPivHouseholderQr().solve(valuesX);
-    const Eigen::Vector2d ay = designY.colPivHouseholderQr().solve(valuesY);
-
-    // Convert x=a0+a1*u+a2*u^2 and y=b0+b1*u back to the coefficient
-    // convention used by the downstream field and perigee calculations.
-    cand.c2 = ax(2) / (zScale * zScale);
-    cand.c1 = ax(1) / zScale - 2.0 * zRef * cand.c2;
-    cand.c0 = ax(0) - ax(1) * zRef / zScale + ax(2) * zRef * zRef / (zScale * zScale);
-    cand.b1 = ay(1) / zScale;
-    cand.b0 = ay(0) - ay(1) * zRef / zScale;
-
-    double sumRx2 = 0.0;
-    double sumRy2 = 0.0;
-    for (std::size_t idx : idxs) {
-      const double z  = ion[idx].z;
-      const double rx = ion[idx].x - (cand.c0 + cand.c1 * z + cand.c2 * z * z);
-      const double ry = ion[idx].y - (cand.b0 + cand.b1 * z);
-      sumRx2 += rx * rx;
-      sumRy2 += ry * ry;
-    }
-    cand.rmsX = std::sqrt(sumRx2 / static_cast<double>(n));
-    cand.rmsY = std::sqrt(sumRy2 / static_cast<double>(n));
-    cand.chi2 = cand.rmsX * cand.rmsX + cand.rmsY * cand.rmsY;
-    return cand;
-  };
-
   auto makeCompatible = [&](StubCandidate& cand) -> bool {
-    if (!(std::isfinite(cand.chi2) && std::isfinite(cand.c1) && std::isfinite(cand.c2) &&
-          std::isfinite(cand.b0) && std::isfinite(cand.b1)) ||
-        cand.rmsX > m_cfg.maxXResidual || cand.rmsY > m_cfg.maxYResidual) {
+    if (!cand.fit.valid || cand.fit.rmsX > m_cfg.maxXResidual ||
+        cand.fit.rmsY > m_cfg.maxYResidual) {
       return false;
     }
 
-    const auto zMinMax = std::minmax_element(
-        cand.hitIndices.begin(), cand.hitIndices.end(),
-        [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
+    const auto zMinMax =
+        std::minmax_element(cand.hitIndices.begin(), cand.hitIndices.end(),
+                            [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
     const double zFirst = ion[*zMinMax.first].z;
     const double zLast  = ion[*zMinMax.second].z;
-    const double txFirst = cand.c1 + 2.0 * cand.c2 * zFirst;
-    if (std::abs(txFirst) > m_cfg.maxAbsTransverseSlope ||
-        std::abs(cand.b1) > m_cfg.maxAbsTransverseSlope) {
+    if (std::abs(cand.fit.tx(zFirst)) > m_cfg.maxAbsTransverseSlope ||
+        std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
       return false;
     }
 
     const unsigned int nSamples = std::max(1u, m_cfg.fieldSamples);
-    double sumBy = 0.0;
-    unsigned int nField = 0;
+    double sumBy                = 0.0;
+    unsigned int nField         = 0;
     for (unsigned int i = 0; i < nSamples; ++i) {
       const double f = nSamples == 1 ? 0.5 : static_cast<double>(i) / (nSamples - 1);
       const double z = zFirst + f * (zLast - zFirst);
-      const double x = cand.c0 + cand.c1 * z + cand.c2 * z * z;
-      const double y = cand.b0 + cand.b1 * z;
+      const double x = cand.fit.x(z);
+      const double y = cand.fit.y(z);
       const Acts::Vector3 global{x * ca + z * sa, y, -x * sa + z * ca};
       const auto field = fieldProvider->getField(global, fieldCache);
       if (!field.ok() || !field.value().allFinite()) {
@@ -336,47 +316,108 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       return false;
     }
 
-    // For a track travelling in +z, d(tx)/dz = -q * 0.2998e-3 * By / p.
-    const double kappa = 2.0 * cand.c2;
-    if (!std::isfinite(kappa) || std::abs(kappa) < 1.0e-12) {
+    cand.momentum = b0stub::momentumFromCurvature(cand.fit.c2, cand.fieldY);
+    if (!std::isfinite(cand.momentum) || cand.momentum < m_cfg.pMin || cand.momentum > m_cfg.pMax) {
       return false;
     }
-    cand.momentum = 2.998e-4 * std::abs(cand.fieldY) / std::abs(kappa);
-    if (!std::isfinite(cand.momentum) || cand.momentum < m_cfg.pMin ||
-        cand.momentum > m_cfg.pMax) {
-      return false;
-    }
-    cand.inferredCharge = kappa * cand.fieldY > 0.0 ? -1 : 1;
+    cand.inferredCharge = b0stub::chargeFromCurvature(cand.fit.c2, cand.fieldY);
     return true;
   };
 
+  unsigned int truncated = 0;
   for (const auto& stationHits : subsets) {
-    std::vector<std::size_t> cursor(stationHits.size(), 0);
-    unsigned int tried = 0;
-    while (tried < perSubsetBudget) {
-      std::vector<std::size_t> idxs;
-      idxs.reserve(stationHits.size());
-      for (std::size_t s = 0; s < stationHits.size(); ++s) {
-        idxs.push_back(stationHits[s][cursor[s]]);
-      }
-      StubCandidate cand = fitCandidate(idxs);
-      if (makeCompatible(cand)) {
-        candidates.push_back(std::move(cand));
-      }
-      ++tried;
+    // The dipole does not bend in y, so the hits of a single track lie on a
+    // straight line in y(z). Anchor on the outermost two stations and keep
+    // only the intermediate hits that sit inside a road around that chord.
+    // This removes most cross-track combinations before any fit, so the
+    // budget below binds only in genuinely dense events rather than
+    // truncating the enumeration in lexicographic order.
+    const std::size_t nStations = stationHits.size();
+    const auto& firstStation    = stationHits.front();
+    const auto& lastStation     = stationHits.back();
 
-      // advance the multi-index cursor
-      std::size_t s = 0;
-      for (; s < stationHits.size(); ++s) {
-        if (++cursor[s] < stationHits[s].size()) {
-          break;
+    unsigned int tried = 0;
+    bool budgetHit     = false;
+    for (std::size_t iFirst = 0; iFirst < firstStation.size() && !budgetHit; ++iFirst) {
+      for (std::size_t iLast = 0; iLast < lastStation.size() && !budgetHit; ++iLast) {
+        const std::size_t hFirst = firstStation[iFirst];
+        const std::size_t hLast  = lastStation[iLast];
+        const double zA          = ion[hFirst].z;
+        const double zB          = ion[hLast].z;
+        if (!(zB > zA)) {
+          continue;
         }
-        cursor[s] = 0;
-      }
-      if (s == stationHits.size()) {
-        break; // enumerated this subset
+        const double slopeY = (ion[hLast].y - ion[hFirst].y) / (zB - zA);
+
+        // Candidate hits per intermediate station, inside the y road.
+        std::vector<std::vector<std::size_t>> middle;
+        middle.reserve(nStations - 2);
+        bool empty = false;
+        for (std::size_t s = 1; s + 1 < nStations; ++s) {
+          std::vector<std::size_t> keep;
+          for (std::size_t idx : stationHits[s]) {
+            const double yPred = ion[hFirst].y + slopeY * (ion[idx].z - zA);
+            if (std::abs(ion[idx].y - yPred) <= m_cfg.yRoadWidth) {
+              keep.push_back(idx);
+            }
+          }
+          if (keep.empty()) {
+            empty = true;
+            break;
+          }
+          middle.push_back(std::move(keep));
+        }
+        if (empty) {
+          continue;
+        }
+
+        // Enumerate the surviving middle combinations.
+        std::vector<std::size_t> cursor(middle.size(), 0);
+        while (true) {
+          if (tried >= perSubsetBudget) {
+            budgetHit = true;
+            ++truncated;
+            break;
+          }
+          std::vector<std::size_t> idxs;
+          idxs.reserve(nStations);
+          idxs.push_back(hFirst);
+          for (std::size_t s = 0; s < middle.size(); ++s) {
+            idxs.push_back(middle[s][cursor[s]]);
+          }
+          idxs.push_back(hLast);
+
+          std::vector<b0stub::Point3> pts;
+          pts.reserve(idxs.size());
+          for (std::size_t idx : idxs) {
+            pts.push_back(ion[idx]);
+          }
+          StubCandidate cand;
+          cand.hitIndices = std::move(idxs);
+          cand.fit        = b0stub::fitStub(pts);
+          if (makeCompatible(cand)) {
+            candidates.push_back(std::move(cand));
+          }
+          ++tried;
+
+          std::size_t s = 0;
+          for (; s < middle.size(); ++s) {
+            if (++cursor[s] < middle[s].size()) {
+              break;
+            }
+            cursor[s] = 0;
+          }
+          if (s == middle.size()) {
+            break; // enumerated this pair
+          }
+        }
       }
     }
+  }
+  if (truncated > 0) {
+    debug("B0 stub seeding hit the combination budget in {} of {} station subsets; some "
+          "combinations were not tried",
+          truncated, subsets.size());
   }
 
   if (candidates.empty()) {
@@ -387,14 +428,15 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // Rank by residual, deduplicate by shared hits, emit up to maxSeeds.
   // ------------------------------------------------------------------
   // More stations first (a 3-point parabola interpolates exactly, so raw
-  // chi2 would always favour subsets over genuine full-station candidates),
-  // then residual within equal station count.
+  // residuals would always favour subsets over genuine full-station
+  // candidates), then residual within equal station count.
   std::sort(candidates.begin(), candidates.end(),
             [](const StubCandidate& a, const StubCandidate& b) {
               if (a.hitIndices.size() != b.hitIndices.size()) {
                 return a.hitIndices.size() > b.hitIndices.size();
               }
-              return a.chi2 < b.chi2;
+              return a.fit.rmsX * a.fit.rmsX + a.fit.rmsY * a.fit.rmsY <
+                     b.fit.rmsX * b.fit.rmsX + b.fit.rmsY * b.fit.rmsY;
             });
 
   std::vector<const StubCandidate*> accepted;
@@ -434,9 +476,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
 
     // state at the field entrance (ion frame)
     const double zIn  = m_cfg.zFieldEntrance;
-    const double txIn = cand->c1 + 2.0 * cand->c2 * zIn;
-    const double xIn  = cand->c0 + cand->c1 * zIn + cand->c2 * zIn * zIn;
-    const double yIn  = cand->b0 + cand->b1 * zIn;
+    const double txIn = cand->fit.tx(zIn);
+    const double xIn  = cand->fit.x(zIn);
+    const double yIn  = cand->fit.y(zIn);
 
     // Direction upstream of the field, in the ion frame.
     //
@@ -456,37 +498,15 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       y0  = 0.0;
     } else {
       txi = txIn;
-      tyi = cand->b1;
+      tyi = cand->fit.b1;
       x0  = xIn - txIn * zIn;
-      y0  = cand->b0; // line intercept at z' = 0
+      y0  = cand->fit.b0; // line intercept at z' = 0
     }
 
     // rotate direction and reference point back to the global frame
-    double dx          = txi * ca + 1.0 * sa;
-    double dy          = tyi;
-    double dz          = -txi * sa + 1.0 * ca;
-    const double dnorm = std::sqrt(dx * dx + dy * dy + dz * dz);
-    dx /= dnorm;
-    dy /= dnorm;
-    dz /= dnorm;
-
-    const double px0 = x0 * ca; // ion (x0, y0, 0) -> global
-    const double py0 = y0;
-    const double pz0 = -x0 * sa;
-
-    // point of closest approach to the z axis
-    const double denom = dx * dx + dy * dy;
-    const double tPca  = denom > 0.0 ? -(px0 * dx + py0 * dy) / denom : 0.0;
-    const double xPca  = px0 + tPca * dx;
-    const double yPca  = py0 + tPca * dy;
-    const double zPca  = pz0 + tPca * dz;
-
-    const double phi   = std::atan2(dy, dx);
-    const double theta = std::acos(std::clamp(dz, -1.0, 1.0));
-
-    // ACTS perigee local frame: loc0 = signed transverse impact, loc1 = z
-    const double loc0 = -xPca * std::sin(phi) + yPca * std::cos(phi);
-    const double loc1 = zPca;
+    const b0stub::Point3 dir{txi * ca + sa, tyi, -txi * sa + ca};
+    const b0stub::Point3 ref{x0 * ca, y0, -x0 * sa};
+    const auto perigee = b0stub::perigeeFromRay(ref, dir, {0.0, 0.0, 0.0});
 
     std::vector<int> charges;
     if (m_cfg.testBothCharges) {
@@ -503,9 +523,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       }
       auto trackparam = track_params_output->create();
       trackparam.setType(-1); // seed
-      trackparam.setLoc({static_cast<float>(loc0), static_cast<float>(loc1)});
-      trackparam.setPhi(static_cast<float>(phi));
-      trackparam.setTheta(static_cast<float>(theta));
+      trackparam.setLoc({static_cast<float>(perigee.loc0), static_cast<float>(perigee.loc1)});
+      trackparam.setPhi(static_cast<float>(perigee.phi));
+      trackparam.setTheta(static_cast<float>(perigee.theta));
       trackparam.setQOverP(static_cast<float>(charge / p));
       trackparam.setTime(10);
 
@@ -521,18 +541,18 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       auto seed = seeds->create();
       seed.setPerigee({0.f, 0.f, 0.f});
       // Larger is better for ACTS seed quality; use the negative mean residual.
-      seed.setQuality(static_cast<float>(-cand->chi2));
+      seed.setQuality(
+          static_cast<float>(-(cand->fit.rmsX * cand->fit.rmsX + cand->fit.rmsY * cand->fit.rmsY)));
       seed.setParams(trackparam);
       for (std::size_t idx : cand->hitIndices) {
-        for (const auto& hit : ion[idx].constituents) {
-          seed.addToHits(hit);
-        }
+        seed.addToHits(ionHits[idx]);
       }
       ++emitted;
 
       trace("B0 stub seed: q={} p={:.2f} GeV By={:.3f} T theta={:.4f} phi={:.3f} "
             "loc=({:.2f},{:.2f}) rms=({:.3f},{:.3f})",
-            charge, p, cand->fieldY, theta, phi, loc0, loc1, cand->rmsX, cand->rmsY);
+            charge, p, cand->fieldY, perigee.theta, perigee.phi, perigee.loc0, perigee.loc1,
+            cand->fit.rmsX, cand->fit.rmsY);
     }
   }
 }

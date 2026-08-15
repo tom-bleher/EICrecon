@@ -3,9 +3,6 @@
 
 #pragma once
 
-#include <Acts/Definitions/Units.hpp>
-#include <string>
-
 namespace eicrecon {
 
 /// Configuration for the B0 stub seeder.
@@ -18,8 +15,6 @@ namespace eicrecon {
 /// back-extrapolates analytically to the origin perigee that CKFTracking
 /// expects.
 struct B0TrackerStubSeederConfig {
-  /// DD4hep readout used to decode the B0 layer field.
-  std::string readout = "B0TrackerHits";
 
   // --- geometry / field ---
   /// Ion-beam rotation about y (rad); B0 hits are fitted in this rotated frame
@@ -44,6 +39,12 @@ struct B0TrackerStubSeederConfig {
   float stationZGap = 50.0;
   /// Minimum number of distinct stations in a seed candidate
   unsigned int minStations = 3;
+  /// Half-width (mm) of the non-bend-plane road used to preselect hits before
+  /// the fit. The dipole does not bend in y, so the hits of one track are
+  /// collinear in y to well within this width, while hits of different tracks
+  /// generally are not. This keeps the enumeration below maxCombinations in
+  /// busy events instead of truncating it.
+  float yRoadWidth = 5.0;
   /// Cap on hit combinations tried per event
   unsigned int maxCombinations = 512;
   /// Maximum seeds emitted per event (after overlap deduplication)
@@ -76,7 +77,9 @@ struct B0TrackerStubSeederConfig {
   /// Kills the 6 m lever-arm amplification of fit errors into the perigee.
   /// NOTE: false is a diagnostic mode only -- the loc covariances below are
   /// tuned for the constrained mode and grossly underestimate the
-  /// extrapolated perigee uncertainty when this is disabled.
+  /// extrapolated perigee uncertainty when this is disabled. Reconstruction
+  /// of displaced decays needs a seed anchored away from the origin, which
+  /// CKFTracking does not yet support.
   bool constrainToBeamline = true;
 
   // --- seed covariance (diagonal variances, edm4eic units: mm^2, rad^2,
