@@ -48,6 +48,12 @@ private:
   ParameterRef<double> m_momentumSmear{
       this, "MomentumSmear", config().momentumSmear,
       "Momentum magnitude fraction to use as width of gaussian smearing"};
+  ParameterRef<double> m_locaError{this, "LocaError", config().locaError, "seed loc0 error"};
+  ParameterRef<double> m_locbError{this, "LocbError", config().locbError, "seed loc1 error"};
+  ParameterRef<double> m_phiError{this, "PhiError", config().phiError, "seed phi error"};
+  ParameterRef<double> m_thetaError{this, "ThetaError", config().thetaError, "seed theta error"};
+  ParameterRef<double> m_qOverPError{this, "QOverPError", config().qOverPError, "seed q/p error"};
+  ParameterRef<double> m_timeError{this, "TimeError", config().timeError, "seed time error"};
 
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
   Service<AlgorithmsInit_service> m_algorithmsInit{this};
