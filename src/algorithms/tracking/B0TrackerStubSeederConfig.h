@@ -52,6 +52,12 @@ struct B0TrackerStubSeederConfig {
   /// Two accepted seeds may share at most this many hits. Keeping this below
   /// three prevents leave-one-out subsets from duplicating their parent seed.
   unsigned int maxSharedHits = 2;
+  /// Hits at the same station closer than this (mm, ion-frame transverse
+  /// distance) count as the same hit for the sharing test above. Front/back
+  /// sensors of one disk see the same track ~0.1 mm apart, so without this a
+  /// single proton with one doubled station emits four seeds, with two doubled
+  /// stations up to sixteen. 0 falls back to exact hit identity.
+  float sharedHitDistance = 0.5;
   /// Charge policy: 0 infers the sign from fitted curvature and sampled By;
   /// +1 or -1 forces a diagnostic hypothesis.
   int charge = 0;

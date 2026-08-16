@@ -439,6 +439,22 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                      b.fit.rmsX * b.fit.rmsX + b.fit.rmsY * b.fit.rmsY;
             });
 
+  // Two hits are "the same" for sharing purposes if they are one hit, or if
+  // they sit at the same station within sharedHitDistance of each other -
+  // the front/back sensor pair of one disk seeing the same track.
+  const double dupDist2 = static_cast<double>(m_cfg.sharedHitDistance) * m_cfg.sharedHitDistance;
+  const auto sameHit    = [&](std::size_t i, std::size_t j) {
+    if (i == j) {
+      return true;
+    }
+    if (dupDist2 <= 0.0 || std::abs(ion[i].z - ion[j].z) > m_cfg.stationZGap) {
+      return false;
+    }
+    const double dx = ion[i].x - ion[j].x;
+    const double dy = ion[i].y - ion[j].y;
+    return dx * dx + dy * dy <= dupDist2;
+  };
+
   std::vector<const StubCandidate*> accepted;
   for (const auto& cand : candidates) {
     if (accepted.size() >= m_cfg.maxSeeds) {
@@ -449,8 +465,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       unsigned int shared = 0;
       for (std::size_t i : cand.hitIndices) {
         for (std::size_t j : acc->hitIndices) {
-          if (i == j) {
+          if (sameHit(i, j)) {
             ++shared;
+            break;
           }
         }
       }

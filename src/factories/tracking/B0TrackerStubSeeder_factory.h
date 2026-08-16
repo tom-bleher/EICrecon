@@ -45,6 +45,9 @@ private:
                                         "maximum seeds per event"};
   ParameterRef<unsigned int> m_maxSharedHits{this, "maxSharedHits", config().maxSharedHits,
                                              "max shared hits between accepted seeds"};
+  ParameterRef<float> m_sharedHitDistance{
+      this, "sharedHitDistance", config().sharedHitDistance,
+      "same-station hits closer than this [mm] count as shared"};
   ParameterRef<int> m_charge{this, "charge", config().charge,
                              "0=infer charge, +/-1=force a diagnostic charge hypothesis"};
   ParameterRef<bool> m_testBothCharges{this, "testBothCharges", config().testBothCharges,
