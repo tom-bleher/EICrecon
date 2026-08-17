@@ -11,12 +11,15 @@
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
 
 using Catch::Approx;
+using eicrecon::b0stub::assignStation;
+using eicrecon::b0stub::clusterStations;
 using eicrecon::b0stub::covarianceModelAdditions;
 using eicrecon::b0stub::endpointCompatibility;
 using eicrecon::b0stub::FieldIntegralFit;
 using eicrecon::b0stub::FieldSample;
 using eicrecon::b0stub::fitFieldIntegral;
 using eicrecon::b0stub::fitStub;
+using eicrecon::b0stub::groupHitsByStation;
 using eicrecon::b0stub::integrateFieldSamples;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
@@ -26,16 +29,27 @@ using eicrecon::b0stub::StubFit;
 namespace {
 
 /// Ion-frame z of the four official B0 disks [mm].
-constexpr std::array<double, 4> kStationZ{5902.0, 6172.0, 6442.0, 6712.0};
+constexpr std::array<double, 4> kOfficialStationZ{5902.0, 6172.0, 6442.0, 6712.0};
+/// Realistic-geometry station offsets 0 / 269.93 / 469.54 / 809.93 mm, anchored
+/// at the official first-disk z so the lever arm stays 810 mm.
+constexpr std::array<double, 4> kRealisticStationZ{5902.0, 6171.93, 6371.54, 6711.93};
 
-/// Sample a parabola/line trajectory at the B0 stations.
+constexpr std::array<std::array<double, 4>, 2> kGeometries{kOfficialStationZ, kRealisticStationZ};
+
+/// Sample a parabola/line trajectory at the given stations.
 std::vector<Point3> sampleTrack(double c0, double c1, double c2, double b0, double b1,
+                                const std::array<double, 4>& stations,
                                 double varianceX = 0.0, double varianceY = 0.0) {
   std::vector<Point3> pts;
-  for (double z : kStationZ) {
+  for (double z : stations) {
     pts.push_back({c0 + c1 * z + c2 * z * z, b0 + b1 * z, z, varianceX, varianceY});
   }
   return pts;
+}
+
+std::vector<Point3> sampleTrack(double c0, double c1, double c2, double b0, double b1,
+                                double varianceX = 0.0, double varianceY = 0.0) {
+  return sampleTrack(c0, c1, c2, b0, b1, kOfficialStationZ, varianceX, varianceY);
 }
 
 } // namespace
@@ -47,20 +61,22 @@ TEST_CASE("B0 stub fit recovers the generating trajectory", "[B0TrackerStubSeede
   const double b0 = -1.5;
   const double b1 = 2.0e-3;
 
-  const StubFit fit = fitStub(sampleTrack(c0, c1, c2, b0, b1));
+  for (const auto& stations : kGeometries) {
+    const StubFit fit = fitStub(sampleTrack(c0, c1, c2, b0, b1, stations));
 
-  REQUIRE(fit.valid);
-  // The fit is over-determined (4 points, 3 parameters) but exact for noiseless
-  // input, so the residuals must vanish and the coefficients must come back.
-  CHECK(fit.rmsX == Approx(0.0).margin(1e-6));
-  CHECK(fit.rmsY == Approx(0.0).margin(1e-9));
-  CHECK(fit.c2 == Approx(c2).epsilon(1e-6));
-  CHECK(fit.b1 == Approx(b1).epsilon(1e-9));
-  // Evaluate rather than compare c0/c1 directly: they are the values of a
-  // polynomial extrapolated back to z = 0, six metres outside the fit range.
-  for (double z : kStationZ) {
-    CHECK(fit.x(z) == Approx(c0 + c1 * z + c2 * z * z).margin(1e-6));
-    CHECK(fit.y(z) == Approx(b0 + b1 * z).margin(1e-9));
+    REQUIRE(fit.valid);
+    // The fit is over-determined (4 points, 3 parameters) but exact for noiseless
+    // input, so the residuals must vanish and the coefficients must come back.
+    CHECK(fit.rmsX == Approx(0.0).margin(1e-6));
+    CHECK(fit.rmsY == Approx(0.0).margin(1e-9));
+    CHECK(fit.c2 == Approx(c2).epsilon(1e-6));
+    CHECK(fit.b1 == Approx(b1).epsilon(1e-9));
+    // Evaluate rather than compare c0/c1 directly: they are the values of a
+    // polynomial extrapolated back to z = 0, six metres outside the fit range.
+    for (double z : stations) {
+      CHECK(fit.x(z) == Approx(c0 + c1 * z + c2 * z * z).margin(1e-6));
+      CHECK(fit.y(z) == Approx(b0 + b1 * z).margin(1e-9));
+    }
   }
 }
 
@@ -136,30 +152,32 @@ TEST_CASE("B0 field-integral fit recovers signed q over p", "[B0TrackerStubSeede
   constexpr double xEntrance  = -2.5;
   constexpr double txEntrance = -1.0e-3;
   constexpr double kBend      = 2.998e-4;
-  std::vector<Point3> points;
-  std::vector<double> integrals;
-  for (double z : kStationZ) {
-    const double dz       = z - zEntrance;
-    const double integral = 0.5 * fieldY * dz * dz;
-    points.push_back({xEntrance + txEntrance * dz - kBend * qOverP * integral, -1.5 + 2.0e-3 * z, z,
-                      4.0e-4, 9.0e-4});
-    integrals.push_back(integral);
-  }
-  const FieldIntegralFit fit = fitFieldIntegral(points, integrals, zEntrance);
-  REQUIRE(fit.valid);
-  REQUIRE(fit.covarianceValid);
-  CHECK(fit.xReference == Approx(xEntrance).margin(1e-10));
-  CHECK(fit.txReference == Approx(txEntrance).margin(1e-12));
-  CHECK(fit.qOverP == Approx(qOverP).epsilon(1e-10));
-  CHECK(fit.rmsX == Approx(0.0).margin(1e-10));
+  for (const auto& stations : kGeometries) {
+    std::vector<Point3> points;
+    std::vector<double> integrals;
+    for (double z : stations) {
+      const double dz       = z - zEntrance;
+      const double integral = 0.5 * fieldY * dz * dz;
+      points.push_back({xEntrance + txEntrance * dz - kBend * qOverP * integral, -1.5 + 2.0e-3 * z,
+                        z, 4.0e-4, 9.0e-4});
+      integrals.push_back(integral);
+    }
+    const FieldIntegralFit fit = fitFieldIntegral(points, integrals, zEntrance);
+    REQUIRE(fit.valid);
+    REQUIRE(fit.covarianceValid);
+    CHECK(fit.xReference == Approx(xEntrance).margin(1e-10));
+    CHECK(fit.txReference == Approx(txEntrance).margin(1e-12));
+    CHECK(fit.qOverP == Approx(qOverP).epsilon(1e-10));
+    CHECK(fit.rmsX == Approx(0.0).margin(1e-10));
 
-  auto scaledPoints = points;
-  for (auto& point : scaledPoints) {
-    point.varianceX *= 4.0;
+    auto scaledPoints = points;
+    for (auto& point : scaledPoints) {
+      point.varianceX *= 4.0;
+    }
+    const auto scaled = fitFieldIntegral(scaledPoints, integrals, zEntrance);
+    REQUIRE(scaled.covarianceValid);
+    CHECK(scaled.covariance[8] == Approx(4.0 * fit.covariance[8]).epsilon(1e-10));
   }
-  const auto scaled = fitFieldIntegral(scaledPoints, integrals, zEntrance);
-  REQUIRE(scaled.covarianceValid);
-  CHECK(scaled.covariance[8] == Approx(4.0 * fit.covariance[8]).epsilon(1e-10));
 }
 
 TEST_CASE("B0 endpoint pruning keeps prompt pairs and rejects cross-pairs",
@@ -206,7 +224,7 @@ TEST_CASE("B0 field-fit covariance propagates to correlated seed parameters",
   constexpr double kBend     = 2.998e-4;
   std::vector<Point3> points;
   std::vector<double> integrals;
-  for (double z : kStationZ) {
+  for (double z : kOfficialStationZ) {
     const double dz       = z - zEntrance;
     const double integral = 0.5 * fieldY * dz * dz;
     points.push_back(
@@ -269,4 +287,52 @@ TEST_CASE("B0 perigee follows the surface it is expressed on", "[B0TrackerStubSe
   CHECK(atOrigin.phi == Approx(atEntrance.phi).epsilon(1e-12));
   CHECK(atOrigin.loc1 == Approx(0.0).margin(1e-9));
   CHECK(atEntrance.loc1 == Approx(-5800.0).epsilon(1e-9));
+}
+
+TEST_CASE("B0 station clustering keeps official and realistic disks split",
+          "[B0TrackerStubSeeder]") {
+  constexpr double gap = 50.0;
+  for (const auto& stations : kGeometries) {
+    const auto clustered = clusterStations({stations.begin(), stations.end()}, gap);
+    REQUIRE(clustered.size() == 4);
+    for (std::size_t i = 0; i < stations.size(); ++i) {
+      CHECK(clustered[i].zMean == Approx(stations[i]).margin(1e-9));
+      CHECK(assignStation(stations[i], clustered, gap) == static_cast<int>(i));
+    }
+  }
+  CHECK(kRealisticStationZ[1] - kRealisticStationZ[0] == Approx(269.93).margin(1e-9));
+  CHECK(kRealisticStationZ[2] - kRealisticStationZ[1] == Approx(199.61).margin(1e-9));
+  CHECK(kRealisticStationZ[3] - kRealisticStationZ[2] == Approx(340.39).margin(1e-9));
+}
+
+TEST_CASE("B0 station clustering merges realistic front/back faces", "[B0TrackerStubSeeder]") {
+  constexpr double gap = 50.0;
+  std::vector<double> surfaceZ;
+  for (double z : kRealisticStationZ) {
+    surfaceZ.push_back(z - 3.5);
+    surfaceZ.push_back(z + 3.5);
+  }
+  const auto clustered = clusterStations(surfaceZ, gap);
+  REQUIRE(clustered.size() == 4);
+  for (std::size_t i = 0; i < kRealisticStationZ.size(); ++i) {
+    CHECK(clustered[i].zMean == Approx(kRealisticStationZ[i]).margin(1e-9));
+    CHECK(clustered[i].zMax - clustered[i].zMin == Approx(7.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("B0 cached stations drop mid-gap hits instead of inventing a station",
+          "[B0TrackerStubSeeder]") {
+  constexpr double gap     = 50.0;
+  const auto stations      = clusterStations({kRealisticStationZ.begin(), kRealisticStationZ.end()}, gap);
+  const double midGap      = 0.5 * (kRealisticStationZ[0] + kRealisticStationZ[1]);
+  std::vector<double> hitZ = {kRealisticStationZ[0], midGap, kRealisticStationZ[1],
+                              kRealisticStationZ[2], kRealisticStationZ[3]};
+  const auto cached        = groupHitsByStation(hitZ, stations, gap);
+  REQUIRE(cached.size() == 4);
+  CHECK(cached.at(0).size() == 1);
+  CHECK(cached.at(1).size() == 1);
+  CHECK(assignStation(midGap, stations, gap) == -1);
+
+  const auto eventContent = groupHitsByStation(hitZ, {}, gap);
+  CHECK(eventContent.size() == 5);
 }

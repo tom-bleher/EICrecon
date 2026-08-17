@@ -27,16 +27,23 @@
 #include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
-#include <DD4hep/Detector.h>
+#include <Acts/Surfaces/Surface.hpp>
 #include <DD4hep/DD4hepUnits.h>
+#include <DD4hep/DetElement.h>
+#include <DD4hep/Detector.h>
+#include <DD4hep/VolumeManager.h>
+#include <DDRec/CellIDPositionConverter.h>
 #include <Eigen/Dense>
+#include <algorithms/geo.h>
 #include <edm4eic/Cov6f.h>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -351,6 +358,93 @@ namespace b0stub {
     return out;
   }
 
+  std::vector<StationInterval> clusterStations(const std::vector<double>& zValues, double gap) {
+    std::vector<double> ordered;
+    ordered.reserve(zValues.size());
+    for (const double z : zValues) {
+      if (std::isfinite(z)) {
+        ordered.push_back(z);
+      }
+    }
+    std::vector<StationInterval> stations;
+    if (ordered.empty() || !(gap > 0.0)) {
+      return stations;
+    }
+    std::sort(ordered.begin(), ordered.end());
+
+    StationInterval current{ordered.front(), ordered.front(), ordered.front()};
+    double sum     = ordered.front();
+    std::size_t n  = 1;
+    for (std::size_t i = 1; i < ordered.size(); ++i) {
+      if (ordered[i] - current.zMax > gap) {
+        current.zMean = sum / static_cast<double>(n);
+        stations.push_back(current);
+        current = {ordered[i], ordered[i], ordered[i]};
+        sum     = ordered[i];
+        n       = 1;
+      } else {
+        current.zMax = ordered[i];
+        sum += ordered[i];
+        ++n;
+      }
+    }
+    current.zMean = sum / static_cast<double>(n);
+    stations.push_back(current);
+    return stations;
+  }
+
+  int assignStation(double z, const std::vector<StationInterval>& stations, double gap) {
+    if (!std::isfinite(z) || !(gap > 0.0)) {
+      return -1;
+    }
+    int best        = -1;
+    double bestDist = 0.0;
+    for (std::size_t i = 0; i < stations.size(); ++i) {
+      if (z < stations[i].zMin - gap || z > stations[i].zMax + gap) {
+        continue;
+      }
+      const double dist = std::abs(z - stations[i].zMean);
+      if (best < 0 || dist < bestDist) {
+        best     = static_cast<int>(i);
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
+  std::map<unsigned int, std::vector<std::size_t>>
+  groupHitsByStation(const std::vector<double>& hitZ, const std::vector<StationInterval>& stations,
+                     double gap) {
+    std::map<unsigned int, std::vector<std::size_t>> byStation;
+    if (hitZ.empty()) {
+      return byStation;
+    }
+    if (!stations.empty()) {
+      for (std::size_t i = 0; i < hitZ.size(); ++i) {
+        const int station = assignStation(hitZ[i], stations, gap);
+        if (station >= 0) {
+          byStation[static_cast<unsigned int>(station)].push_back(i);
+        }
+      }
+      return byStation;
+    }
+
+    std::vector<std::size_t> order(hitZ.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&](std::size_t a, std::size_t b) { return hitZ[a] < hitZ[b]; });
+    unsigned int station = 0;
+    double lastZ         = hitZ[order.front()];
+    for (const std::size_t idx : order) {
+      if (hitZ[idx] - lastZ > gap) {
+        ++station;
+      }
+      lastZ = hitZ[idx];
+      byStation[station].push_back(idx);
+    }
+    return byStation;
+  }
+
 } // namespace b0stub
 
 namespace {
@@ -530,6 +624,82 @@ void B0TrackerStubSeeder::init() {
   if (!std::isfinite(m_crossing_angle)) {
     throw std::runtime_error("B0TrackerStubSeeder: DD4hep CrossingAngle is not finite");
   }
+
+  const double ca = std::cos(m_crossing_angle);
+  const double sa = std::sin(m_crossing_angle);
+  if (m_cfg.zFieldEntrance > 0.0) {
+    m_z_field_entrance = m_cfg.zFieldEntrance;
+  } else {
+    try {
+      const double zCenter = detector->constant<double>("B0PF_CenterPosition") / dd4hep::mm;
+      const double length  = detector->constant<double>("B0PF_Length") / dd4hep::mm;
+      double xLab          = 0.0;
+      try {
+        xLab = detector->constant<double>("B0PF_XPosition") / dd4hep::mm;
+      } catch (const std::exception&) {
+        xLab = 0.0;
+      }
+      const double zLab  = zCenter - 0.5 * length;
+      m_z_field_entrance = xLab * sa + zLab * ca;
+    } catch (const std::exception& error) {
+      throw std::runtime_error(
+          std::string("B0TrackerStubSeeder: cannot derive zFieldEntrance from B0PF "
+                      "geometry; set B0TrackerStubSeeder:zFieldEntrance or provide "
+                      "B0PF_CenterPosition and B0PF_Length (") +
+          error.what() + ")");
+    }
+  }
+  if (!std::isfinite(m_z_field_entrance)) {
+    throw std::runtime_error("B0TrackerStubSeeder: B0pf field entrance z is not finite");
+  }
+
+  m_stations.clear();
+  m_volume_to_station.clear();
+  std::vector<double> surfaceZ;
+  std::vector<std::uint64_t> surfaceVolumes;
+  auto volman = detector->volumeManager();
+  for (const auto& [volId, surface] : m_acts_context->surfaceMap()) {
+    if (surface == nullptr) {
+      continue;
+    }
+    std::string path;
+    try {
+      const auto* volumeContext = volman.lookupContext(volId);
+      if (volumeContext == nullptr) {
+        continue;
+      }
+      path = volumeContext->element.path();
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (path.find("B0Tracker") == std::string::npos ||
+        path.find("Companion") != std::string::npos) {
+      continue;
+    }
+    const auto center = surface->center(m_acts_context->getActsGeometryContext());
+    const double zIon =
+        center.x() / Acts::UnitConstants::mm * sa + center.z() / Acts::UnitConstants::mm * ca;
+    if (!std::isfinite(zIon)) {
+      continue;
+    }
+    surfaceZ.push_back(zIon);
+    surfaceVolumes.push_back(volId);
+  }
+  m_stations = b0stub::clusterStations(surfaceZ, m_cfg.stationZGap);
+  if (m_stations.empty()) {
+    warning("B0TrackerStubSeeder: no B0 ACTS surfaces found; station grouping "
+            "will fall back to per-event hit clustering");
+  } else {
+    for (std::size_t i = 0; i < surfaceZ.size(); ++i) {
+      const int station = b0stub::assignStation(surfaceZ[i], m_stations, m_cfg.stationZGap);
+      if (station >= 0) {
+        m_volume_to_station[surfaceVolumes[i]] = static_cast<unsigned int>(station);
+      }
+    }
+    debug("B0TrackerStubSeeder: cached {} B0 stations from {} ACTS surfaces; "
+          "field entrance z = {:.3f} mm",
+          m_stations.size(), surfaceZ.size(), m_z_field_entrance);
+  }
 }
 
 void B0TrackerStubSeeder::process(const Input& input, const Output& output) const {
@@ -570,31 +740,48 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     return;
   }
 
-  // Group by ion-frame z, not cellID layer. Official B0 uses layer 1-4 for
-  // four disks; the realistic geometry uses layer 1-8 (front/back per disk).
-  // (layer+1)/2 therefore collapses the official detector to two stations
-  // and emits no seeds. Official disks are ~270 mm apart; realistic
-  // front/back faces of one disk are ~7 mm.
+  // Prefer the stations cached from B0 ACTS surfaces at init. Official B0
+  // uses layer 1-4 for four disks; the realistic geometry uses layer 1-8
+  // (front/back per disk), so cellID layer/2 is not portable. The cached
+  // z-gap clustering is. Hits that do not match a surface station (or, if
+  // no surfaces were found, the per-event fallback) are dropped.
   std::map<unsigned int, std::vector<std::size_t>> byStation;
-  {
-    std::vector<std::size_t> order(ion.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(),
-              [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
-    unsigned int station = 0;
-    double last_z        = ion[order.front()].z;
-    for (std::size_t idx : order) {
-      if (ion[idx].z - last_z > m_cfg.stationZGap) {
-        ++station;
+  const auto* converter =
+      m_volume_to_station.empty() ? nullptr : algorithms::GeoSvc::instance().cellIDPositionConverter();
+  if (!m_stations.empty()) {
+    for (std::size_t i = 0; i < ion.size(); ++i) {
+      int station = -1;
+      if (converter != nullptr) {
+        try {
+          const auto* volumeContext = converter->findContext(ionHits[i].getCellID());
+          if (volumeContext != nullptr) {
+            const auto found = m_volume_to_station.find(volumeContext->identifier);
+            if (found != m_volume_to_station.end()) {
+              station = static_cast<int>(found->second);
+            }
+          }
+        } catch (const std::exception&) {
+          station = -1;
+        }
       }
-      last_z = ion[idx].z;
-      byStation[station].push_back(idx);
+      if (station < 0) {
+        station = b0stub::assignStation(ion[i].z, m_stations, m_cfg.stationZGap);
+      }
+      if (station >= 0) {
+        byStation[static_cast<unsigned int>(station)].push_back(i);
+      }
     }
-    for (auto& [stationIndex, indices] : byStation) {
-      std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
-        return std::tie(ion[a].x, ion[a].y, ion[a].z) < std::tie(ion[b].x, ion[b].y, ion[b].z);
-      });
+  } else {
+    std::vector<double> hitZ(ion.size());
+    for (std::size_t i = 0; i < ion.size(); ++i) {
+      hitZ[i] = ion[i].z;
     }
+    byStation = b0stub::groupHitsByStation(hitZ, {}, m_cfg.stationZGap);
+  }
+  for (auto& [stationIndex, indices] : byStation) {
+    std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
+      return std::tie(ion[a].x, ion[a].y, ion[a].z) < std::tie(ion[b].x, ion[b].y, ion[b].z);
+    });
   }
 
   // The auxiliary and field-integral fits need >= 3 points, so 3 stations is the hard floor
@@ -656,13 +843,13 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                             [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
     const double zFirst = ion[*zMinMax.first].z;
     const double zLast  = ion[*zMinMax.second].z;
-    if (std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope || !(m_cfg.zFieldEntrance < zFirst)) {
+    if (std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope || !(m_z_field_entrance < zFirst)) {
       return false;
     }
 
     std::vector<b0stub::Point3> points;
     points.reserve(cand.hitIndices.size());
-    std::vector<double> meshZ{m_cfg.zFieldEntrance};
+    std::vector<double> meshZ{m_z_field_entrance};
     for (const std::size_t idx : cand.hitIndices) {
       points.push_back(ion[idx]);
       meshZ.push_back(ion[idx].z);
@@ -670,7 +857,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const unsigned int requestedSamples = std::max(2u, m_cfg.fieldSamples);
     for (unsigned int i = 1; i + 1 < requestedSamples; ++i) {
       const double fraction = static_cast<double>(i) / (requestedSamples - 1);
-      meshZ.push_back(m_cfg.zFieldEntrance + fraction * (zLast - m_cfg.zFieldEntrance));
+      meshZ.push_back(m_z_field_entrance + fraction * (zLast - m_z_field_entrance));
     }
     std::sort(meshZ.begin(), meshZ.end());
     meshZ.erase(std::unique(meshZ.begin(), meshZ.end()), meshZ.end());
@@ -695,7 +882,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         double x       = cand.fit.x(z);
         if (iteration > 0) {
           constexpr double kBend = 2.998e-4;
-          x = previousFit.xReference + previousFit.txReference * (z - m_cfg.zFieldEntrance) -
+          x = previousFit.xReference + previousFit.txReference * (z - m_z_field_entrance) -
               kBend * previousFit.qOverP * previousMoments[i].second;
         }
         const double y = cand.fit.y(z);
@@ -725,7 +912,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         }
         hitIntegrals.push_back(moments[index].second);
       }
-      auto fieldFit = b0stub::fitFieldIntegral(points, hitIntegrals, m_cfg.zFieldEntrance);
+      auto fieldFit = b0stub::fitFieldIntegral(points, hitIntegrals, m_z_field_entrance);
       if (!fieldFit.valid) {
         return false;
       }

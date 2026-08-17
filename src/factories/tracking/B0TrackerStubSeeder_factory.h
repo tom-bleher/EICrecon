@@ -27,8 +27,9 @@ private:
 
   ParameterRef<float> m_minAbsFieldY{this, "minAbsFieldY", config().minAbsFieldY,
                                      "minimum |By| from the ACTS field provider [T]"};
-  ParameterRef<float> m_zFieldEntrance{this, "zFieldEntrance", config().zFieldEntrance,
-                                       "ion-frame z of B0pf field entrance [mm]"};
+  ParameterRef<float> m_zFieldEntrance{
+      this, "zFieldEntrance", config().zFieldEntrance,
+      "ion-frame z of B0pf field entrance [mm]; <=0 uses B0PF geometry"};
   ParameterRef<unsigned int> m_fieldSamples{this, "fieldSamples", config().fieldSamples,
                                             "minimum ACTS field mesh points per candidate"};
   ParameterRef<unsigned int> m_fieldFitIterations{this, "fieldFitIterations",

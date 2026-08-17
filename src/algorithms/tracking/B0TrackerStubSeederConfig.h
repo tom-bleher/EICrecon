@@ -21,10 +21,11 @@ struct B0TrackerStubSeederConfig {
   /// each fitted candidate. This is only a guard against a zero-field query,
   /// not an analytic B0 field substitute.
   float minAbsFieldY = 0.05;
-  /// Ion-frame z where the B0pf field region starts (mm), used only for the
-  /// origin-constrained upstream chord. Momentum always uses the sampled ACTS
-  /// field at the fitted candidate.
-  float zFieldEntrance = 5800.0;
+  /// Ion-frame z of the B0pf field entrance [mm]. Used for the
+  /// origin-constrained upstream chord and as the field-integral reference.
+  /// <= 0 (the default) derives it from B0PF_CenterPosition, B0PF_Length and
+  /// B0PF_XPosition. A positive value overrides that for diagnostics.
+  float zFieldEntrance = 0.0;
   /// Minimum number of ACTS field mesh points from the B0pf entrance through
   /// the outermost selected station; all selected hit positions are added too.
   unsigned int fieldSamples = 5;

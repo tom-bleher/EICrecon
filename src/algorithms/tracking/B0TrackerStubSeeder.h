@@ -8,8 +8,12 @@
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
 #include <array>
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "algorithms/interfaces/WithPodConfig.h"
@@ -130,6 +134,28 @@ namespace b0stub {
   };
   PerigeeParams perigeeFromRay(const Point3& ref, const Point3& dir, const Point3& perigee);
 
+  /// One physical B0 station after z-gap clustering of surface or hit z.
+  struct StationInterval {
+    double zMin{};
+    double zMax{};
+    double zMean{};
+  };
+
+  /// Single-linkage clustering of ion-frame z values. Values farther apart
+  /// than `gap` start a new station. Official disks (~270 mm) split;
+  /// realistic front/back faces (~7 mm) stay one station.
+  std::vector<StationInterval> clusterStations(const std::vector<double>& zValues, double gap);
+
+  /// Index of the cached station containing `z`, or -1 if none is within `gap`
+  /// of that station's [zMin, zMax] interval.
+  int assignStation(double z, const std::vector<StationInterval>& stations, double gap);
+
+  /// Group hit indices by station. When `stations` is non-empty, assign each
+  /// hit to the cached geometry cluster; otherwise cluster the hit z values.
+  std::map<unsigned int, std::vector<std::size_t>>
+  groupHitsByStation(const std::vector<double>& hitZ, const std::vector<StationInterval>& stations,
+                     double gap);
+
 } // namespace b0stub
 
 using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
@@ -158,6 +184,9 @@ public:
 private:
   std::shared_ptr<const ActsGeometryProvider> m_acts_context;
   double m_crossing_angle{};
+  double m_z_field_entrance{};
+  std::vector<b0stub::StationInterval> m_stations;
+  std::unordered_map<std::uint64_t, unsigned int> m_volume_to_station;
 };
 
 } // namespace eicrecon
