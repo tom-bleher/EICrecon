@@ -7,6 +7,7 @@
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
+#include <array>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -25,10 +26,14 @@ namespace b0stub {
     double x{};
     double y{};
     double z{};
+    /// Measurement variances along the ion-frame bend/non-bend sensor axes.
+    double varianceX{};
+    double varianceY{};
   };
 
-  /// Trajectory of one stub in the ion frame: a parabola in the bend plane and a
-  /// straight line in the non-bend plane.
+  /// Auxiliary fit in the ion frame: a parabola in the bend plane and a line
+  /// in the non-bend plane. It supplies compatibility residuals and the
+  /// initial field-sampling path; momentum comes from FieldIntegralFit.
   struct StubFit {
     double c0{}; ///< x(z) = c0 + c1 z + c2 z^2
     double c1{};
@@ -37,6 +42,16 @@ namespace b0stub {
     double b1{};
     double rmsX{};
     double rmsY{};
+    double zRef{};
+    double zScale{};
+    /// Coefficients and covariances in the numerically stable basis
+    /// u=(z-zRef)/zScale, in row-major order. They are populated when every
+    /// input point has positive finite x/y variances.
+    std::array<double, 3> basisX{};
+    std::array<double, 2> basisY{};
+    std::array<double, 9> covarianceX{};
+    std::array<double, 4> covarianceY{};
+    bool covarianceValid{false};
     bool valid{false};
 
     double x(double z) const { return c0 + c1 * z + c2 * z * z; }
@@ -45,18 +60,65 @@ namespace b0stub {
     double tx(double z) const { return c1 + 2.0 * c2 * z; }
   };
 
-  /// Least-squares fit of `pts` (ion frame, mm). Needs at least three points for
-  /// the parabola; z is centred and scaled internally so that the normal
-  /// equations stay well conditioned six metres from the origin.
+  /// Least-squares fit of `pts` (ion frame, mm). Needs at least three points;
+  /// z is centred and scaled internally so the equations stay well conditioned.
   StubFit fitStub(const std::vector<Point3>& pts);
 
-  /// Momentum [GeV] implied by the bend-plane curvature in a field `fieldY` [T],
-  /// for positions in mm. Returns 0 for a straight (infinite momentum) fit.
-  double momentumFromCurvature(double c2, double fieldY);
+  struct FieldSample {
+    double z{};      ///< ion-frame position [mm]
+    double fieldY{}; ///< dipole field [T]
+  };
 
-  /// Charge sign implied by that curvature for a track travelling towards +z.
-  /// A positive particle in a +y field bends towards -x, i.e. d(tx)/dz < 0.
-  int chargeFromCurvature(double c2, double fieldY);
+  struct FieldIntegral {
+    double first{};  ///< integral B_y ds [T mm]
+    double second{}; ///< integral (z-s) B_y ds [T mm^2]
+  };
+
+  /// Integrate a sorted field mesh with a piecewise-linear B_y model. The
+  /// returned moments have the same length and are referenced to samples[0].
+  std::vector<FieldIntegral> integrateFieldSamples(const std::vector<FieldSample>& samples);
+
+  /// Weighted linear bend-plane fit
+  /// x(z)=x_ref+tx_ref*(z-z_ref)-K*(q/p)*I(z).
+  struct FieldIntegralFit {
+    double zReference{};
+    double xReference{};
+    double txReference{};
+    double qOverP{};
+    double rmsX{};
+    /// Covariance of (xReference,txReference,qOverP), row-major.
+    std::array<double, 9> covariance{};
+    bool covarianceValid{false};
+    bool valid{false};
+  };
+  FieldIntegralFit fitFieldIntegral(const std::vector<Point3>& pts,
+                                    const std::vector<double>& secondIntegrals, double zReference);
+
+  struct EndpointCompatibility {
+    double slopeY{};
+    double beamResidual{};
+    double score{};
+    bool valid{false};
+  };
+  /// Fast non-bending-plane compatibility for an outer-station hit pair.
+  EndpointCompatibility endpointCompatibility(const Point3& first, const Point3& last,
+                                              double maxAbsSlope, double maxBeamResidual,
+                                              bool constrainToBeamline);
+
+  /// Diagonal (phi, theta, q/p) variance additions for calibrated residual and
+  /// external field-integral uncertainties.
+  std::array<double, 3> covarianceModelAdditions(double qOverP, double phiModelVariance,
+                                                 double phiQOverPScale, double thetaModelVariance,
+                                                 double thetaQOverPScale,
+                                                 double qOverPModelVariance,
+                                                 double qOverPRelativeUncertainty,
+                                                 double fieldRelativeUncertainty);
+
+  /// Propagate the fitted coefficient covariance to
+  /// (loc0,loc1,phi,theta,q/p), returned as a row-major 5x5 matrix.
+  std::array<double, 25> seedCovarianceFromFit(const FieldIntegralFit& bendFit,
+                                               const StubFit& nonBendFit, double crossingAngle,
+                                               bool constrainToBeamline);
 
   /// Perigee parameters of the straight ray leaving `ref` along `dir`, expressed
   /// on a perigee surface centred at `perigee`. All positions in mm.
@@ -77,8 +139,8 @@ using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
 /// Dedicated seeder for the B0 tracker (dipole spectrometer at z ~ 6 m).
 ///
 /// Fits one hit per station with a straight line (non-bend plane) and a
-/// parabola (bend plane) in the ion-rotated frame, extracts direction,
-/// momentum (from the dipole sagitta) and charge, back-extrapolates
+/// sampled field-integral basis (bend plane) in the ion-rotated frame, extracts direction,
+/// signed q/p (from the sampled dipole field integral), back-extrapolates
 /// analytically to the origin, and emits seed parameters on the origin
 /// perigee surface that CKFTracking expects.
 class B0TrackerStubSeeder : public B0TrackerStubSeederAlgorithm,
@@ -95,6 +157,7 @@ public:
 
 private:
   std::shared_ptr<const ActsGeometryProvider> m_acts_context;
+  double m_crossing_angle{};
 };
 
 } // namespace eicrecon

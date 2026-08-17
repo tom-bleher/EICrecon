@@ -25,20 +25,24 @@ private:
   PodioOutput<edm4eic::TrackSeed> m_seeds_output{this};
   PodioOutput<edm4eic::TrackParameters> m_trackparams_output{this};
 
-  ParameterRef<float> m_crossingAngle{this, "crossingAngle", config().crossingAngle,
-                                      "ion-beam rotation about y [rad]"};
   ParameterRef<float> m_minAbsFieldY{this, "minAbsFieldY", config().minAbsFieldY,
                                      "minimum |By| from the ACTS field provider [T]"};
   ParameterRef<float> m_zFieldEntrance{this, "zFieldEntrance", config().zFieldEntrance,
                                        "ion-frame z of B0pf field entrance [mm]"};
   ParameterRef<unsigned int> m_fieldSamples{this, "fieldSamples", config().fieldSamples,
-                                            "ACTS field samples per fitted candidate"};
+                                            "minimum ACTS field mesh points per candidate"};
+  ParameterRef<unsigned int> m_fieldFitIterations{this, "fieldFitIterations",
+                                                  config().fieldFitIterations,
+                                                  "field-integral fit iterations per candidate"};
   ParameterRef<float> m_stationZGap{this, "stationZGap", config().stationZGap,
                                     "ion-frame z gap [mm] that starts a new B0 station"};
   ParameterRef<unsigned int> m_minStations{this, "minStations", config().minStations,
                                            "minimum distinct stations per seed"};
   ParameterRef<float> m_yRoadWidth{this, "yRoadWidth", config().yRoadWidth,
                                    "half-width [mm] of the non-bend-plane preselection road"};
+  ParameterRef<float> m_maxYBeamlineResidual{
+      this, "maxYBeamlineResidual", config().maxYBeamlineResidual,
+      "max endpoint residual [mm] relative to a beamline ray"};
   ParameterRef<unsigned int> m_maxCombinations{this, "maxCombinations", config().maxCombinations,
                                                "cap on hit combinations per event"};
   ParameterRef<unsigned int> m_maxSeeds{this, "maxSeeds", config().maxSeeds,
@@ -52,11 +56,13 @@ private:
                              "0=infer charge, +/-1=force a diagnostic charge hypothesis"};
   ParameterRef<bool> m_testBothCharges{this, "testBothCharges", config().testBothCharges,
                                        "emit both charge hypotheses for each candidate"};
+  ParameterRef<float> m_minCurvatureSignificance{
+      this, "minCurvatureSignificance", config().minCurvatureSignificance,
+      "minimum |q/p| significance for a resolved charge sign"};
   ParameterRef<bool> m_constrainToBeamline{this, "constrainToBeamline",
                                            config().constrainToBeamline,
                                            "use origin->field-entrance chord for the direction"};
   ParameterRef<float> m_pMin{this, "pMin", config().pMin, "min accepted fitted momentum [GeV]"};
-  ParameterRef<float> m_pMax{this, "pMax", config().pMax, "max accepted fitted momentum [GeV]"};
   ParameterRef<float> m_maxYResidual{this, "maxYResidual", config().maxYResidual,
                                      "max RMS y(z) compatibility residual [mm]"};
   ParameterRef<float> m_maxXResidual{this, "maxXResidual", config().maxXResidual,
@@ -64,12 +70,35 @@ private:
   ParameterRef<float> m_maxAbsTransverseSlope{this, "maxAbsTransverseSlope",
                                               config().maxAbsTransverseSlope,
                                               "max transverse slope at first B0 station"};
-  ParameterRef<float> m_locaError{this, "locaError", config().locaError, "seed loc0 error"};
-  ParameterRef<float> m_locbError{this, "locbError", config().locbError, "seed loc1 error"};
-  ParameterRef<float> m_phiError{this, "phiError", config().phiError, "seed phi error"};
-  ParameterRef<float> m_thetaError{this, "thetaError", config().thetaError, "seed theta error"};
-  ParameterRef<float> m_qOverPError{this, "qOverPError", config().qOverPError, "seed q/p error"};
-  ParameterRef<float> m_timeError{this, "timeError", config().timeError, "seed time error"};
+  ParameterRef<float> m_locaVariance{this, "locaVariance", config().locaVariance,
+                                     "fallback seed loc0 variance"};
+  ParameterRef<float> m_locbVariance{this, "locbVariance", config().locbVariance,
+                                     "fallback seed loc1 variance"};
+  ParameterRef<float> m_phiVariance{this, "phiVariance", config().phiVariance,
+                                    "fallback seed phi variance"};
+  ParameterRef<float> m_thetaVariance{this, "thetaVariance", config().thetaVariance,
+                                      "fallback seed theta variance"};
+  ParameterRef<float> m_qOverPVariance{this, "qOverPVariance", config().qOverPVariance,
+                                       "fallback seed q/p variance"};
+  ParameterRef<float> m_timeVariance{this, "timeVariance", config().timeVariance,
+                                     "seed time variance"};
+  ParameterRef<float> m_phiModelVariance{this, "phiModelVariance", config().phiModelVariance,
+                                         "calibrated residual phi variance"};
+  ParameterRef<float> m_phiQOverPScale{this, "phiQOverPScale", config().phiQOverPScale,
+                                       "q/p-scaled phi model uncertainty [GeV rad]"};
+  ParameterRef<float> m_thetaModelVariance{this, "thetaModelVariance", config().thetaModelVariance,
+                                           "calibrated residual theta variance"};
+  ParameterRef<float> m_thetaQOverPScale{this, "thetaQOverPScale", config().thetaQOverPScale,
+                                         "q/p-scaled theta model uncertainty [GeV rad]"};
+  ParameterRef<float> m_qOverPModelVariance{this, "qOverPModelVariance",
+                                            config().qOverPModelVariance,
+                                            "calibrated residual q/p variance"};
+  ParameterRef<float> m_qOverPRelativeUncertainty{this, "qOverPRelativeUncertainty",
+                                                  config().qOverPRelativeUncertainty,
+                                                  "relative q/p trajectory-model uncertainty"};
+  ParameterRef<float> m_fieldRelativeUncertainty{this, "fieldRelativeUncertainty",
+                                                 config().fieldRelativeUncertainty,
+                                                 "external relative field-integral uncertainty"};
 
 public:
   void Configure() {

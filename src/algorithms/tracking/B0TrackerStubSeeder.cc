@@ -11,15 +11,14 @@
 //
 //   1. rotate hits into the ion frame (crossing angle about y), where the
 //      dipole bend lies purely in the x-z plane;
-//   2. per candidate (one hit per station): fit y(z) with a line and x(z)
-//      with a parabola; the curvature gives |p| (sagitta), the tangent the
-//      direction;
-//   3. back-extrapolate analytically: parabola to the field entrance, then a
-//      straight line to the origin; express the result on the origin perigee
+//   2. fit y(z) with a line and use a bend-plane parabola only to initialize
+//      sampling of the full field along each candidate;
+//   3. fit x(z) in the sampled field-integral basis for signed q/p and local
+//      direction, then back-extrapolate and express the result on the origin perigee
 //      surface, which is what CKFTracking hard-codes as seed reference.
 //
 // The seed is only a starting point: the CKF refits with the full field and
-// material, so the stub momentum must not be read as a measurement. Because
+// material, so the stub q/p must not be read as a final measurement. Because
 // the seed is expressed at the origin it is a prompt-track solution; see
 // constrainToBeamline in the config for why displaced decays need more.
 
@@ -28,6 +27,8 @@
 #include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
+#include <DD4hep/Detector.h>
+#include <DD4hep/DD4hepUnits.h>
 #include <Eigen/Dense>
 #include <edm4eic/Cov6f.h>
 #include <algorithm>
@@ -68,11 +69,14 @@ namespace b0stub {
     if (!(zScale > 0.0)) {
       return fit;
     }
+    fit.zRef   = zRef;
+    fit.zScale = zScale;
 
     Eigen::MatrixXd designX(n, 3);
     Eigen::MatrixXd designY(n, 2);
     Eigen::VectorXd valuesX(n);
     Eigen::VectorXd valuesY(n);
+    bool haveVariances = true;
     for (std::size_t row = 0; row < n; ++row) {
       const double u  = (pts[row].z - zRef) / zScale;
       designX(row, 0) = 1.0;
@@ -82,9 +86,38 @@ namespace b0stub {
       designY(row, 0) = 1.0;
       designY(row, 1) = u;
       valuesY(row)    = pts[row].y;
+      haveVariances &= std::isfinite(pts[row].varianceX) && pts[row].varianceX > 0.0 &&
+                       std::isfinite(pts[row].varianceY) && pts[row].varianceY > 0.0;
     }
-    const Eigen::Vector3d ax = designX.colPivHouseholderQr().solve(valuesX);
-    const Eigen::Vector2d ay = designY.colPivHouseholderQr().solve(valuesY);
+
+    Eigen::MatrixXd weightedX       = designX;
+    Eigen::MatrixXd weightedY       = designY;
+    Eigen::VectorXd weightedValuesX = valuesX;
+    Eigen::VectorXd weightedValuesY = valuesY;
+    if (haveVariances) {
+      for (std::size_t row = 0; row < n; ++row) {
+        const double wx = 1.0 / std::sqrt(pts[row].varianceX);
+        const double wy = 1.0 / std::sqrt(pts[row].varianceY);
+        weightedX.row(row) *= wx;
+        weightedY.row(row) *= wy;
+        weightedValuesX(row) *= wx;
+        weightedValuesY(row) *= wy;
+      }
+    }
+
+    const auto decompositionX = weightedX.colPivHouseholderQr();
+    const auto decompositionY = weightedY.colPivHouseholderQr();
+    if (decompositionX.rank() < 3 || decompositionY.rank() < 2) {
+      return fit;
+    }
+    const Eigen::Vector3d ax = decompositionX.solve(weightedValuesX);
+    const Eigen::Vector2d ay = decompositionY.solve(weightedValuesY);
+    for (int i = 0; i < 3; ++i) {
+      fit.basisX[i] = ax(i);
+    }
+    for (int i = 0; i < 2; ++i) {
+      fit.basisY[i] = ay(i);
+    }
 
     // Convert back from the shifted/scaled variable to plain powers of z.
     fit.c2 = ax(2) / (zScale * zScale);
@@ -92,6 +125,28 @@ namespace b0stub {
     fit.c0 = ax(0) - ax(1) * zRef / zScale + ax(2) * zRef * zRef / (zScale * zScale);
     fit.b1 = ay(1) / zScale;
     fit.b0 = ay(0) - ay(1) * zRef / zScale;
+
+    if (haveVariances) {
+      const Eigen::Matrix3d normalX = weightedX.transpose() * weightedX;
+      const Eigen::Matrix2d normalY = weightedY.transpose() * weightedY;
+      const Eigen::Matrix3d covAx   = normalX.ldlt().solve(Eigen::Matrix3d::Identity());
+      const Eigen::Matrix2d covAy   = normalY.ldlt().solve(Eigen::Matrix2d::Identity());
+
+      if (covAx.allFinite() && covAy.allFinite() && (covAx.diagonal().array() > 0.0).all() &&
+          (covAy.diagonal().array() > 0.0).all()) {
+        for (int row = 0; row < 3; ++row) {
+          for (int col = 0; col < 3; ++col) {
+            fit.covarianceX[3 * row + col] = covAx(row, col);
+          }
+        }
+        for (int row = 0; row < 2; ++row) {
+          for (int col = 0; col < 2; ++col) {
+            fit.covarianceY[2 * row + col] = covAy(row, col);
+          }
+        }
+        fit.covarianceValid = true;
+      }
+    }
 
     double sumRx2 = 0.0;
     double sumRy2 = 0.0;
@@ -110,17 +165,161 @@ namespace b0stub {
     return fit;
   }
 
-  double momentumFromCurvature(double c2, double fieldY) {
-    // For a track travelling in +z, d(tx)/dz = -q * 0.2998e-3 * By / p, with z
-    // in mm, By in T and p in GeV.
-    const double kappa = 2.0 * c2;
-    if (!std::isfinite(kappa) || std::abs(kappa) < 1.0e-12) {
-      return 0.0;
+  std::vector<FieldIntegral> integrateFieldSamples(const std::vector<FieldSample>& samples) {
+    std::vector<FieldIntegral> result(samples.size());
+    if (samples.empty()) {
+      return result;
     }
-    return 2.998e-4 * std::abs(fieldY) / std::abs(kappa);
+    if (!std::isfinite(samples.front().z) || !std::isfinite(samples.front().fieldY)) {
+      return {};
+    }
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+      const double h      = samples[i].z - samples[i - 1].z;
+      const double fieldA = samples[i - 1].fieldY;
+      const double fieldB = samples[i].fieldY;
+      if (!(h > 0.0) || !std::isfinite(fieldA) || !std::isfinite(fieldB)) {
+        return {};
+      }
+      result[i].second =
+          result[i - 1].second + h * result[i - 1].first + h * h * (fieldA / 3.0 + fieldB / 6.0);
+      result[i].first = result[i - 1].first + 0.5 * h * (fieldA + fieldB);
+    }
+    return result;
   }
 
-  int chargeFromCurvature(double c2, double fieldY) { return 2.0 * c2 * fieldY > 0.0 ? -1 : 1; }
+  FieldIntegralFit fitFieldIntegral(const std::vector<Point3>& pts,
+                                    const std::vector<double>& secondIntegrals, double zReference) {
+    FieldIntegralFit fit;
+    fit.zReference      = zReference;
+    const std::size_t n = pts.size();
+    if (n < 3 || secondIntegrals.size() != n || !std::isfinite(zReference)) {
+      return fit;
+    }
+
+    double zScale          = 0.0;
+    double bendScale       = 0.0;
+    constexpr double kBend = 2.998e-4;
+    for (std::size_t i = 0; i < n; ++i) {
+      zScale    = std::max(zScale, std::abs(pts[i].z - zReference));
+      bendScale = std::max(bendScale, std::abs(kBend * secondIntegrals[i]));
+    }
+    if (!(zScale > 0.0) || !(bendScale > 0.0)) {
+      return fit;
+    }
+
+    Eigen::MatrixXd design(n, 3);
+    Eigen::VectorXd values(n);
+    bool haveVariances = true;
+    for (std::size_t row = 0; row < n; ++row) {
+      if (!(std::isfinite(pts[row].x) && std::isfinite(pts[row].z) &&
+            std::isfinite(secondIntegrals[row]))) {
+        return fit;
+      }
+      design(row, 0) = 1.0;
+      design(row, 1) = (pts[row].z - zReference) / zScale;
+      design(row, 2) = -kBend * secondIntegrals[row] / bendScale;
+      values(row)    = pts[row].x;
+      haveVariances &= std::isfinite(pts[row].varianceX) && pts[row].varianceX > 0.0;
+    }
+
+    Eigen::MatrixXd weightedDesign = design;
+    Eigen::VectorXd weightedValues = values;
+    if (haveVariances) {
+      for (std::size_t row = 0; row < n; ++row) {
+        const double weight = 1.0 / std::sqrt(pts[row].varianceX);
+        weightedDesign.row(row) *= weight;
+        weightedValues(row) *= weight;
+      }
+    }
+
+    const auto decomposition = weightedDesign.colPivHouseholderQr();
+    if (decomposition.rank() < 3) {
+      return fit;
+    }
+    const Eigen::Vector3d beta = decomposition.solve(weightedValues);
+    fit.xReference             = beta(0);
+    fit.txReference            = beta(1) / zScale;
+    fit.qOverP                 = beta(2) / bendScale;
+
+    double sumResidual2 = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      const double predicted = fit.xReference + fit.txReference * (pts[i].z - zReference) -
+                               kBend * fit.qOverP * secondIntegrals[i];
+      const double residual = pts[i].x - predicted;
+      sumResidual2 += residual * residual;
+    }
+    fit.rmsX = std::sqrt(sumResidual2 / static_cast<double>(n));
+
+    if (haveVariances) {
+      const Eigen::Matrix3d normal           = weightedDesign.transpose() * weightedDesign;
+      const Eigen::Matrix3d scaledCovariance = normal.ldlt().solve(Eigen::Matrix3d::Identity());
+      Eigen::Matrix3d transform              = Eigen::Matrix3d::Identity();
+      transform(1, 1)                        = 1.0 / zScale;
+      transform(2, 2)                        = 1.0 / bendScale;
+      const Eigen::Matrix3d covariance       = transform * scaledCovariance * transform.transpose();
+      if (covariance.allFinite() && (covariance.diagonal().array() > 0.0).all()) {
+        for (int row = 0; row < 3; ++row) {
+          for (int col = 0; col < 3; ++col) {
+            fit.covariance[3 * row + col] = covariance(row, col);
+          }
+        }
+        fit.covarianceValid = true;
+      }
+    }
+
+    fit.valid = std::isfinite(fit.xReference) && std::isfinite(fit.txReference) &&
+                std::isfinite(fit.qOverP) && std::isfinite(fit.rmsX);
+    return fit;
+  }
+
+  EndpointCompatibility endpointCompatibility(const Point3& first, const Point3& last,
+                                              double maxAbsSlope, double maxBeamResidual,
+                                              bool constrainToBeamline) {
+    EndpointCompatibility result;
+    const double dz = last.z - first.z;
+    if (!(dz > 0.0) || !std::isfinite(first.y) || !std::isfinite(first.z) ||
+        !std::isfinite(last.y) || !std::isfinite(last.z) || !(maxAbsSlope > 0.0)) {
+      return result;
+    }
+    result.slopeY = (last.y - first.y) / dz;
+    if (!std::isfinite(result.slopeY) || std::abs(result.slopeY) > maxAbsSlope) {
+      return result;
+    }
+
+    if (constrainToBeamline && maxBeamResidual > 0.0) {
+      if (first.z == 0.0) {
+        return result;
+      }
+      result.beamResidual = last.y - first.y * last.z / first.z;
+      if (!std::isfinite(result.beamResidual) || std::abs(result.beamResidual) > maxBeamResidual) {
+        return result;
+      }
+    }
+    const double slopeScore = std::abs(result.slopeY) / maxAbsSlope;
+    const double beamScore  = constrainToBeamline && maxBeamResidual > 0.0
+                                  ? std::abs(result.beamResidual) / maxBeamResidual
+                                  : 0.0;
+    result.score            = beamScore + slopeScore;
+    result.valid            = true;
+    return result;
+  }
+
+  std::array<double, 3> covarianceModelAdditions(double qOverP, double phiModelVariance,
+                                                 double phiQOverPScale, double thetaModelVariance,
+                                                 double thetaQOverPScale,
+                                                 double qOverPModelVariance,
+                                                 double qOverPRelativeUncertainty,
+                                                 double fieldRelativeUncertainty) {
+    const double qOverP2 = qOverP * qOverP;
+    return {
+        std::max(phiModelVariance, 0.0) + phiQOverPScale * phiQOverPScale * qOverP2,
+        std::max(thetaModelVariance, 0.0) + thetaQOverPScale * thetaQOverPScale * qOverP2,
+        std::max(qOverPModelVariance, 0.0) +
+            (qOverPRelativeUncertainty * qOverPRelativeUncertainty +
+             fieldRelativeUncertainty * fieldRelativeUncertainty) *
+                qOverP2,
+    };
+  }
 
   PerigeeParams perigeeFromRay(const Point3& ref, const Point3& dir, const Point3& perigee) {
     PerigeeParams out;
@@ -159,17 +358,177 @@ namespace {
   struct StubCandidate {
     std::vector<std::size_t> hitIndices;
     b0stub::StubFit fit;
-    double fieldY{0.0};
-    double momentum{0.0};
+    b0stub::FieldIntegralFit bendFit;
+    double txFirst{0.0};
+    double qOverP{0.0};
+    double qOverPVariance{0.0};
     int inferredCharge{0};
   };
 
+  using SeedVector = Eigen::Matrix<double, 5, 1>;
+  using SeedMatrix = Eigen::Matrix<double, 5, 5>;
+
+  struct EntranceFit {
+    double x{};
+    double tx{};
+    double qOverP{};
+    double y{};
+    double ty{};
+  };
+
+  EntranceFit entranceFit(const b0stub::FieldIntegralFit& bendFit,
+                          const b0stub::StubFit& nonBendFit) {
+    const double u = (bendFit.zReference - nonBendFit.zRef) / nonBendFit.zScale;
+    return {bendFit.xReference, bendFit.txReference, bendFit.qOverP,
+            nonBendFit.basisY[0] + nonBendFit.basisY[1] * u,
+            nonBendFit.basisY[1] / nonBendFit.zScale};
+  }
+
+  SeedVector seedStateFromEntrance(const EntranceFit& entrance, double zFieldEntrance,
+                                   double crossingAngle, bool constrainToBeamline) {
+    const double ca = std::cos(crossingAngle);
+    const double sa = std::sin(crossingAngle);
+
+    double txi;
+    double tyi;
+    double x0;
+    double y0;
+    if (constrainToBeamline) {
+      txi = entrance.x / zFieldEntrance;
+      tyi = entrance.y / zFieldEntrance;
+      x0  = 0.0;
+      y0  = 0.0;
+    } else {
+      txi = entrance.tx;
+      tyi = entrance.ty;
+      x0  = entrance.x - entrance.tx * zFieldEntrance;
+      y0  = entrance.y - entrance.ty * zFieldEntrance;
+    }
+
+    const b0stub::Point3 dir{txi * ca + sa, tyi, -txi * sa + ca};
+    const b0stub::Point3 ref{x0 * ca, y0, -x0 * sa};
+    const auto perigee = b0stub::perigeeFromRay(ref, dir, {0.0, 0.0, 0.0});
+
+    SeedVector state;
+    state << perigee.loc0, perigee.loc1, perigee.phi, perigee.theta, entrance.qOverP;
+    return state;
+  }
+
+  SeedVector seedStateFromFit(const b0stub::FieldIntegralFit& bendFit,
+                              const b0stub::StubFit& nonBendFit, double crossingAngle,
+                              bool constrainToBeamline) {
+    return seedStateFromEntrance(entranceFit(bendFit, nonBendFit), bendFit.zReference,
+                                 crossingAngle, constrainToBeamline);
+  }
+
+  SeedMatrix propagateFitCovariance(const b0stub::FieldIntegralFit& bendFit,
+                                    const b0stub::StubFit& nonBendFit, double crossingAngle,
+                                    bool constrainToBeamline) {
+    SeedMatrix result = SeedMatrix::Zero();
+    if (!bendFit.covarianceValid || !nonBendFit.covarianceValid) {
+      return result;
+    }
+
+    SeedMatrix fitCovariance = SeedMatrix::Zero();
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        fitCovariance(row, col) = bendFit.covariance[3 * row + col];
+      }
+    }
+    Eigen::Matrix2d yCovariance;
+    for (int row = 0; row < 2; ++row) {
+      for (int col = 0; col < 2; ++col) {
+        yCovariance(row, col) = nonBendFit.covarianceY[2 * row + col];
+      }
+    }
+    const double uEntrance = (bendFit.zReference - nonBendFit.zRef) / nonBendFit.zScale;
+    Eigen::Matrix2d yTransform;
+    yTransform << 1.0, uEntrance, 0.0, 1.0 / nonBendFit.zScale;
+    fitCovariance.block<2, 2>(3, 3) = yTransform * yCovariance * yTransform.transpose();
+
+    const EntranceFit nominal = entranceFit(bendFit, nonBendFit);
+    const std::array<double, 5> values{nominal.x, nominal.tx, nominal.qOverP, nominal.y,
+                                       nominal.ty};
+    SeedMatrix jacobian = SeedMatrix::Zero();
+    for (int column = 0; column < 5; ++column) {
+      const double sigma = std::sqrt(std::max(0.0, fitCovariance(column, column)));
+      const double step  = std::max({1.0e-10, sigma * 1.0e-3, std::abs(values[column]) * 1.0e-7});
+      auto plus          = nominal;
+      auto minus         = nominal;
+      double* plusValue  = nullptr;
+      double* minusValue = nullptr;
+      switch (column) {
+      case 0:
+        plusValue  = &plus.x;
+        minusValue = &minus.x;
+        break;
+      case 1:
+        plusValue  = &plus.tx;
+        minusValue = &minus.tx;
+        break;
+      case 2:
+        plusValue  = &plus.qOverP;
+        minusValue = &minus.qOverP;
+        break;
+      case 3:
+        plusValue  = &plus.y;
+        minusValue = &minus.y;
+        break;
+      default:
+        plusValue  = &plus.ty;
+        minusValue = &minus.ty;
+        break;
+      }
+      *plusValue += step;
+      *minusValue -= step;
+      const SeedVector upper =
+          seedStateFromEntrance(plus, bendFit.zReference, crossingAngle, constrainToBeamline);
+      const SeedVector lower =
+          seedStateFromEntrance(minus, bendFit.zReference, crossingAngle, constrainToBeamline);
+      SeedVector difference = upper - lower;
+      difference(2)         = std::remainder(upper(2) - lower(2), 2.0 * std::acos(-1.0));
+      jacobian.col(column)  = difference / (2.0 * step);
+    }
+
+    result = jacobian * fitCovariance * jacobian.transpose();
+    if (!result.allFinite()) {
+      return SeedMatrix::Zero();
+    }
+    return 0.5 * (result + result.transpose());
+  }
+
 } // namespace
+
+namespace b0stub {
+
+  std::array<double, 25> seedCovarianceFromFit(const FieldIntegralFit& bendFit,
+                                               const StubFit& nonBendFit, double crossingAngle,
+                                               bool constrainToBeamline) {
+    const SeedMatrix covariance =
+        propagateFitCovariance(bendFit, nonBendFit, crossingAngle, constrainToBeamline);
+    std::array<double, 25> result{};
+    for (int row = 0; row < 5; ++row) {
+      for (int col = 0; col < 5; ++col) {
+        result[5 * row + col] = covariance(row, col);
+      }
+    }
+    return result;
+  }
+
+} // namespace b0stub
 
 void B0TrackerStubSeeder::init() {
   m_acts_context = algorithms::ActsSvc::instance().acts_geometry_provider();
   if (m_acts_context == nullptr) {
     throw std::runtime_error("B0TrackerStubSeeder: ACTS geometry service is unavailable");
+  }
+  const auto* detector = m_acts_context->dd4hepDetector();
+  if (detector == nullptr) {
+    throw std::runtime_error("B0TrackerStubSeeder: DD4hep detector is unavailable");
+  }
+  m_crossing_angle = detector->constant<double>("CrossingAngle") / dd4hep::rad;
+  if (!std::isfinite(m_crossing_angle)) {
+    throw std::runtime_error("B0TrackerStubSeeder: DD4hep CrossingAngle is not finite");
   }
 }
 
@@ -181,8 +540,8 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     return;
   }
 
-  const double ca = std::cos(m_cfg.crossingAngle);
-  const double sa = std::sin(m_cfg.crossingAngle);
+  const double ca = std::cos(m_crossing_angle);
+  const double sa = std::sin(m_crossing_angle);
 
   // ------------------------------------------------------------------
   // Rotate hit positions into the ion frame and group them by station.
@@ -193,8 +552,13 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   ionHits.reserve(hits->size());
 
   for (const auto& hit : *hits) {
-    const auto& p = hit.getPosition();
-    const b0stub::Point3 q{p.x * ca - p.z * sa, p.y, p.x * sa + p.z * ca};
+    const auto& p          = hit.getPosition();
+    const auto& covariance = hit.getPositionError();
+    // TrackerHit position covariance is expressed in the sensor surface frame.
+    // B0's CartesianGridXY sensors rotate with the assembly, so their local
+    // x/y axes are precisely the ion-frame bend/non-bend axes used by this fit.
+    const b0stub::Point3 q{p.x * ca - p.z * sa, p.y, p.x * sa + p.z * ca, covariance.xx,
+                           covariance.yy};
     if (!(std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z))) {
       debug("Skipping B0 hit with non-finite position");
       continue;
@@ -226,9 +590,14 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       last_z = ion[idx].z;
       byStation[station].push_back(idx);
     }
+    for (auto& [stationIndex, indices] : byStation) {
+      std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
+        return std::tie(ion[a].x, ion[a].y, ion[a].z) < std::tie(ion[b].x, ion[b].y, ion[b].z);
+      });
+    }
   }
 
-  // The parabola fit needs >= 3 points, so 3 stations is the hard floor
+  // The auxiliary and field-integral fits need >= 3 points, so 3 stations is the hard floor
   // regardless of configuration (a 2-station mode would need a line fit with
   // a momentum prior instead).
   const unsigned int minStations = std::max(m_cfg.minStations, 3u);
@@ -287,44 +656,119 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                             [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
     const double zFirst = ion[*zMinMax.first].z;
     const double zLast  = ion[*zMinMax.second].z;
-    if (std::abs(cand.fit.tx(zFirst)) > m_cfg.maxAbsTransverseSlope ||
-        std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
+    if (std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope || !(m_cfg.zFieldEntrance < zFirst)) {
       return false;
     }
 
-    const unsigned int nSamples = std::max(1u, m_cfg.fieldSamples);
-    double sumBy                = 0.0;
-    unsigned int nField         = 0;
-    for (unsigned int i = 0; i < nSamples; ++i) {
-      const double f = nSamples == 1 ? 0.5 : static_cast<double>(i) / (nSamples - 1);
-      const double z = zFirst + f * (zLast - zFirst);
-      const double x = cand.fit.x(z);
-      const double y = cand.fit.y(z);
-      const Acts::Vector3 global{x * ca + z * sa, y, -x * sa + z * ca};
-      const auto field = fieldProvider->getField(global, fieldCache);
-      if (!field.ok() || !field.value().allFinite()) {
-        continue;
+    std::vector<b0stub::Point3> points;
+    points.reserve(cand.hitIndices.size());
+    std::vector<double> meshZ{m_cfg.zFieldEntrance};
+    for (const std::size_t idx : cand.hitIndices) {
+      points.push_back(ion[idx]);
+      meshZ.push_back(ion[idx].z);
+    }
+    const unsigned int requestedSamples = std::max(2u, m_cfg.fieldSamples);
+    for (unsigned int i = 1; i + 1 < requestedSamples; ++i) {
+      const double fraction = static_cast<double>(i) / (requestedSamples - 1);
+      meshZ.push_back(m_cfg.zFieldEntrance + fraction * (zLast - m_cfg.zFieldEntrance));
+    }
+    std::sort(meshZ.begin(), meshZ.end());
+    meshZ.erase(std::unique(meshZ.begin(), meshZ.end()), meshZ.end());
+
+    const auto meshIndex = [&](double z) -> std::size_t {
+      const auto found = std::lower_bound(meshZ.begin(), meshZ.end(), z);
+      if (found == meshZ.end() || std::abs(*found - z) > 1.0e-8) {
+        return meshZ.size();
       }
-      sumBy += field.value().y() / Acts::UnitConstants::T;
-      ++nField;
+      return static_cast<std::size_t>(std::distance(meshZ.begin(), found));
+    };
+
+    b0stub::FieldIntegralFit previousFit;
+    std::vector<b0stub::FieldIntegral> previousMoments;
+    const unsigned int iterations = std::max(1u, m_cfg.fieldFitIterations);
+    for (unsigned int iteration = 0; iteration < iterations; ++iteration) {
+      std::vector<b0stub::FieldSample> samples;
+      samples.reserve(meshZ.size());
+      double maxAbsFieldY = 0.0;
+      for (std::size_t i = 0; i < meshZ.size(); ++i) {
+        const double z = meshZ[i];
+        double x       = cand.fit.x(z);
+        if (iteration > 0) {
+          constexpr double kBend = 2.998e-4;
+          x = previousFit.xReference + previousFit.txReference * (z - m_cfg.zFieldEntrance) -
+              kBend * previousFit.qOverP * previousMoments[i].second;
+        }
+        const double y = cand.fit.y(z);
+        const Acts::Vector3 global{x * ca + z * sa, y, -x * sa + z * ca};
+        const auto field = fieldProvider->getField(global, fieldCache);
+        if (!field.ok() || !field.value().allFinite()) {
+          return false;
+        }
+        const double fieldY = field.value().y() / Acts::UnitConstants::T;
+        maxAbsFieldY        = std::max(maxAbsFieldY, std::abs(fieldY));
+        samples.push_back({z, fieldY});
+      }
+      if (maxAbsFieldY < m_cfg.minAbsFieldY) {
+        return false;
+      }
+
+      const auto moments = b0stub::integrateFieldSamples(samples);
+      if (moments.size() != meshZ.size()) {
+        return false;
+      }
+      std::vector<double> hitIntegrals;
+      hitIntegrals.reserve(points.size());
+      for (const auto& point : points) {
+        const std::size_t index = meshIndex(point.z);
+        if (index == meshZ.size()) {
+          return false;
+        }
+        hitIntegrals.push_back(moments[index].second);
+      }
+      auto fieldFit = b0stub::fitFieldIntegral(points, hitIntegrals, m_cfg.zFieldEntrance);
+      if (!fieldFit.valid) {
+        return false;
+      }
+      previousFit     = fieldFit;
+      previousMoments = moments;
     }
-    if (nField == 0) {
+
+    cand.bendFit  = previousFit;
+    cand.fit.rmsX = cand.bendFit.rmsX;
+    if (cand.fit.rmsX > m_cfg.maxXResidual) {
       return false;
     }
-    cand.fieldY = sumBy / static_cast<double>(nField);
-    if (!std::isfinite(cand.fieldY) || std::abs(cand.fieldY) < m_cfg.minAbsFieldY) {
+    const std::size_t firstIndex = meshIndex(zFirst);
+    if (firstIndex == meshZ.size()) {
+      return false;
+    }
+    constexpr double kBend = 2.998e-4;
+    cand.txFirst =
+        cand.bendFit.txReference - kBend * cand.bendFit.qOverP * previousMoments[firstIndex].first;
+    if (std::abs(cand.txFirst) > m_cfg.maxAbsTransverseSlope) {
       return false;
     }
 
-    cand.momentum = b0stub::momentumFromCurvature(cand.fit.c2, cand.fieldY);
-    if (!std::isfinite(cand.momentum) || cand.momentum < m_cfg.pMin || cand.momentum > m_cfg.pMax) {
+    cand.qOverP = cand.bendFit.qOverP;
+    if (!std::isfinite(cand.qOverP) ||
+        (m_cfg.pMin > 0.0 && std::abs(cand.qOverP) > 1.0 / m_cfg.pMin)) {
       return false;
     }
-    cand.inferredCharge = b0stub::chargeFromCurvature(cand.fit.c2, cand.fieldY);
+    cand.inferredCharge = cand.qOverP < 0.0 ? -1 : 1;
+    if (cand.bendFit.covarianceValid) {
+      cand.qOverPVariance = cand.bendFit.covariance[8];
+    } else {
+      cand.qOverPVariance = m_cfg.qOverPVariance;
+    }
+    if (!std::isfinite(cand.qOverPVariance) || cand.qOverPVariance <= 0.0) {
+      cand.qOverPVariance = m_cfg.qOverPVariance;
+    }
     return true;
   };
 
-  unsigned int truncated = 0;
+  unsigned int truncated        = 0;
+  unsigned int endpointPairs    = 0;
+  unsigned int endpointRejected = 0;
   for (const auto& stationHits : subsets) {
     // The dipole does not bend in y, so the hits of a single track lie on a
     // straight line in y(z). Anchor on the outermost two stations and keep
@@ -336,88 +780,124 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const auto& firstStation    = stationHits.front();
     const auto& lastStation     = stationHits.back();
 
+    struct EndpointPair {
+      std::size_t first{};
+      std::size_t last{};
+      b0stub::EndpointCompatibility compatibility;
+    };
+    std::vector<EndpointPair> compatibleEndpoints;
+    compatibleEndpoints.reserve(firstStation.size() * lastStation.size());
+    for (const std::size_t hFirst : firstStation) {
+      for (const std::size_t hLast : lastStation) {
+        ++endpointPairs;
+        const auto compatibility =
+            b0stub::endpointCompatibility(ion[hFirst], ion[hLast], m_cfg.maxAbsTransverseSlope,
+                                          m_cfg.maxYBeamlineResidual, m_cfg.constrainToBeamline);
+        if (!compatibility.valid) {
+          ++endpointRejected;
+          continue;
+        }
+        compatibleEndpoints.push_back({hFirst, hLast, compatibility});
+      }
+    }
+    std::sort(compatibleEndpoints.begin(), compatibleEndpoints.end(),
+              [&](const EndpointPair& a, const EndpointPair& b) {
+                return std::tie(a.compatibility.score, ion[a.first].x, ion[a.first].y,
+                                ion[a.last].x, ion[a.last].y) <
+                       std::tie(b.compatibility.score, ion[b.first].x, ion[b.first].y,
+                                ion[b.last].x, ion[b.last].y);
+              });
+
     unsigned int tried = 0;
     bool budgetHit     = false;
-    for (std::size_t iFirst = 0; iFirst < firstStation.size() && !budgetHit; ++iFirst) {
-      for (std::size_t iLast = 0; iLast < lastStation.size() && !budgetHit; ++iLast) {
-        const std::size_t hFirst = firstStation[iFirst];
-        const std::size_t hLast  = lastStation[iLast];
-        const double zA          = ion[hFirst].z;
-        const double zB          = ion[hLast].z;
-        if (!(zB > zA)) {
-          continue;
-        }
-        const double slopeY = (ion[hLast].y - ion[hFirst].y) / (zB - zA);
+    for (const auto& endpoints : compatibleEndpoints) {
+      if (budgetHit) {
+        break;
+      }
+      const std::size_t hFirst = endpoints.first;
+      const std::size_t hLast  = endpoints.last;
+      const double zA          = ion[hFirst].z;
+      const double zB          = ion[hLast].z;
+      const double slopeY      = endpoints.compatibility.slopeY;
 
-        // Candidate hits per intermediate station, inside the y road.
-        std::vector<std::vector<std::size_t>> middle;
-        middle.reserve(nStations - 2);
-        bool empty = false;
-        for (std::size_t s = 1; s + 1 < nStations; ++s) {
-          std::vector<std::size_t> keep;
-          for (std::size_t idx : stationHits[s]) {
-            const double yPred = ion[hFirst].y + slopeY * (ion[idx].z - zA);
-            if (std::abs(ion[idx].y - yPred) <= m_cfg.yRoadWidth) {
-              keep.push_back(idx);
-            }
+      // Candidate hits per intermediate station, inside the y road.
+      std::vector<std::vector<std::size_t>> middle;
+      middle.reserve(nStations - 2);
+      bool empty = false;
+      for (std::size_t s = 1; s + 1 < nStations; ++s) {
+        std::vector<std::pair<double, std::size_t>> ranked;
+        for (std::size_t idx : stationHits[s]) {
+          const double yPred    = ion[hFirst].y + slopeY * (ion[idx].z - zA);
+          const double residual = std::abs(ion[idx].y - yPred);
+          if (residual <= m_cfg.yRoadWidth) {
+            ranked.emplace_back(residual, idx);
           }
-          if (keep.empty()) {
-            empty = true;
+        }
+        std::sort(ranked.begin(), ranked.end(), [&](const auto& a, const auto& b) {
+          return std::tie(a.first, ion[a.second].x, ion[a.second].y, ion[a.second].z) <
+                 std::tie(b.first, ion[b.second].x, ion[b.second].y, ion[b.second].z);
+        });
+        std::vector<std::size_t> keep;
+        keep.reserve(ranked.size());
+        for (const auto& [residual, idx] : ranked) {
+          keep.push_back(idx);
+        }
+        if (keep.empty()) {
+          empty = true;
+          break;
+        }
+        middle.push_back(std::move(keep));
+      }
+      if (empty) {
+        continue;
+      }
+
+      // Enumerate the surviving middle combinations.
+      std::vector<std::size_t> cursor(middle.size(), 0);
+      while (true) {
+        if (tried >= perSubsetBudget) {
+          budgetHit = true;
+          ++truncated;
+          break;
+        }
+        std::vector<std::size_t> idxs;
+        idxs.reserve(nStations);
+        idxs.push_back(hFirst);
+        for (std::size_t s = 0; s < middle.size(); ++s) {
+          idxs.push_back(middle[s][cursor[s]]);
+        }
+        idxs.push_back(hLast);
+
+        std::vector<b0stub::Point3> pts;
+        pts.reserve(idxs.size());
+        for (std::size_t idx : idxs) {
+          pts.push_back(ion[idx]);
+        }
+        StubCandidate cand;
+        cand.hitIndices = std::move(idxs);
+        cand.fit        = b0stub::fitStub(pts);
+        if (makeCompatible(cand)) {
+          candidates.push_back(std::move(cand));
+        }
+        ++tried;
+
+        std::size_t s = 0;
+        for (; s < middle.size(); ++s) {
+          if (++cursor[s] < middle[s].size()) {
             break;
           }
-          middle.push_back(std::move(keep));
+          cursor[s] = 0;
         }
-        if (empty) {
-          continue;
-        }
-
-        // Enumerate the surviving middle combinations.
-        std::vector<std::size_t> cursor(middle.size(), 0);
-        while (true) {
-          if (tried >= perSubsetBudget) {
-            budgetHit = true;
-            ++truncated;
-            break;
-          }
-          std::vector<std::size_t> idxs;
-          idxs.reserve(nStations);
-          idxs.push_back(hFirst);
-          for (std::size_t s = 0; s < middle.size(); ++s) {
-            idxs.push_back(middle[s][cursor[s]]);
-          }
-          idxs.push_back(hLast);
-
-          std::vector<b0stub::Point3> pts;
-          pts.reserve(idxs.size());
-          for (std::size_t idx : idxs) {
-            pts.push_back(ion[idx]);
-          }
-          StubCandidate cand;
-          cand.hitIndices = std::move(idxs);
-          cand.fit        = b0stub::fitStub(pts);
-          if (makeCompatible(cand)) {
-            candidates.push_back(std::move(cand));
-          }
-          ++tried;
-
-          std::size_t s = 0;
-          for (; s < middle.size(); ++s) {
-            if (++cursor[s] < middle[s].size()) {
-              break;
-            }
-            cursor[s] = 0;
-          }
-          if (s == middle.size()) {
-            break; // enumerated this pair
-          }
+        if (s == middle.size()) {
+          break; // enumerated this pair
         }
       }
     }
   }
   if (truncated > 0) {
-    debug("B0 stub seeding hit the combination budget in {} of {} station subsets; some "
-          "combinations were not tried",
-          truncated, subsets.size());
+    debug("B0 stub seeding rejected {}/{} endpoint pairs and hit the combination budget in {} "
+          "of {} station subsets; some combinations were not tried",
+          endpointRejected, endpointPairs, truncated, subsets.size());
   }
 
   if (candidates.empty()) {
@@ -427,7 +907,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // ------------------------------------------------------------------
   // Rank by residual, deduplicate by shared hits, emit up to maxSeeds.
   // ------------------------------------------------------------------
-  // More stations first (a 3-point parabola interpolates exactly, so raw
+  // More stations first (a 3-point auxiliary fit interpolates exactly, so raw
   // residuals would always favour subsets over genuine full-station
   // candidates), then residual within equal station count.
   std::sort(candidates.begin(), candidates.end(),
@@ -489,41 +969,10 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     if (emitted >= m_cfg.maxSeeds) {
       break;
     }
-    const double p = cand->momentum;
-
-    // state at the field entrance (ion frame)
-    const double zIn  = m_cfg.zFieldEntrance;
-    const double txIn = cand->fit.tx(zIn);
-    const double xIn  = cand->fit.x(zIn);
-    const double yIn  = cand->fit.y(zIn);
-
-    // Direction upstream of the field, in the ion frame.
-    //
-    // Beamline-constrained (default): the vertex is at the origin, so use the
-    // chord origin -> field-entrance point. Position errors of O(0.1 mm) over
-    // ~5.8 m give ~20 urad direction accuracy, whereas the fitted slope
-    // back-extrapolated over the same lever arm amplifies mm-level fit errors
-    // into meter-level perigee positions.
-    double txi;
-    double tyi;
-    double x0;
-    double y0;
-    if (m_cfg.constrainToBeamline) {
-      txi = xIn / zIn;
-      tyi = yIn / zIn;
-      x0  = 0.0;
-      y0  = 0.0;
-    } else {
-      txi = txIn;
-      tyi = cand->fit.b1;
-      x0  = xIn - txIn * zIn;
-      y0  = cand->fit.b0; // line intercept at z' = 0
-    }
-
-    // rotate direction and reference point back to the global frame
-    const b0stub::Point3 dir{txi * ca + sa, tyi, -txi * sa + ca};
-    const b0stub::Point3 ref{x0 * ca, y0, -x0 * sa};
-    const auto perigee = b0stub::perigeeFromRay(ref, dir, {0.0, 0.0, 0.0});
+    const SeedVector state =
+        seedStateFromFit(cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline);
+    const SeedMatrix fitCovariance = propagateFitCovariance(
+        cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline);
 
     std::vector<int> charges;
     if (m_cfg.testBothCharges) {
@@ -531,28 +980,58 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     } else if (m_cfg.charge == -1 || m_cfg.charge == 1) {
       charges = {m_cfg.charge};
     } else {
-      charges = {cand->inferredCharge};
+      const double significance =
+          std::abs(cand->qOverP) / std::sqrt(std::max(cand->qOverPVariance, 0.0));
+      if (cand->qOverP != 0.0 && significance < m_cfg.minCurvatureSignificance) {
+        charges = {-1, 1};
+      } else {
+        charges = {cand->inferredCharge};
+      }
     }
 
     for (const int charge : charges) {
       if (emitted >= m_cfg.maxSeeds) {
         break;
       }
+      const double emittedQOverP = charge * std::abs(cand->qOverP);
+      const double qOverPSign    = cand->qOverP == 0.0 ? 1.0 : emittedQOverP / cand->qOverP;
+      SeedMatrix covariance      = fitCovariance;
+      covariance.row(4) *= qOverPSign;
+      covariance.col(4) *= qOverPSign;
+
+      const std::array<double, 5> fallbackVariances{m_cfg.locaVariance, m_cfg.locbVariance,
+                                                    m_cfg.phiVariance, m_cfg.thetaVariance,
+                                                    m_cfg.qOverPVariance};
+      for (int i = 0; i < 5; ++i) {
+        if (!std::isfinite(covariance(i, i)) || covariance(i, i) <= 0.0) {
+          covariance.row(i).setZero();
+          covariance.col(i).setZero();
+          covariance(i, i) = fallbackVariances[i];
+        }
+      }
+      const auto modelVariances = b0stub::covarianceModelAdditions(
+          emittedQOverP, m_cfg.phiModelVariance, m_cfg.phiQOverPScale, m_cfg.thetaModelVariance,
+          m_cfg.thetaQOverPScale, m_cfg.qOverPModelVariance, m_cfg.qOverPRelativeUncertainty,
+          m_cfg.fieldRelativeUncertainty);
+      covariance(2, 2) += modelVariances[0];
+      covariance(3, 3) += modelVariances[1];
+      covariance(4, 4) += modelVariances[2];
+
       auto trackparam = track_params_output->create();
       trackparam.setType(-1); // seed
-      trackparam.setLoc({static_cast<float>(perigee.loc0), static_cast<float>(perigee.loc1)});
-      trackparam.setPhi(static_cast<float>(perigee.phi));
-      trackparam.setTheta(static_cast<float>(perigee.theta));
-      trackparam.setQOverP(static_cast<float>(charge / p));
+      trackparam.setLoc({static_cast<float>(state(0)), static_cast<float>(state(1))});
+      trackparam.setPhi(static_cast<float>(state(2)));
+      trackparam.setTheta(static_cast<float>(state(3)));
+      trackparam.setQOverP(static_cast<float>(emittedQOverP));
       trackparam.setTime(10);
 
       edm4eic::Cov6f cov;
-      cov(0, 0) = m_cfg.locaError;
-      cov(1, 1) = m_cfg.locbError;
-      cov(2, 2) = m_cfg.phiError;
-      cov(3, 3) = m_cfg.thetaError;
-      cov(4, 4) = m_cfg.qOverPError;
-      cov(5, 5) = m_cfg.timeError;
+      for (int row = 0; row < 5; ++row) {
+        for (int col = row; col < 5; ++col) {
+          cov(row, col) = static_cast<float>(covariance(row, col));
+        }
+      }
+      cov(5, 5) = m_cfg.timeVariance;
       trackparam.setCovariance(cov);
 
       auto seed = seeds->create();
@@ -566,10 +1045,10 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       }
       ++emitted;
 
-      trace("B0 stub seed: q={} p={:.2f} GeV By={:.3f} T theta={:.4f} phi={:.3f} "
+      trace("B0 stub seed: q={} q/p={:.5f} 1/GeV theta={:.4f} phi={:.3f} "
             "loc=({:.2f},{:.2f}) rms=({:.3f},{:.3f})",
-            charge, p, cand->fieldY, perigee.theta, perigee.phi, perigee.loc0, perigee.loc1,
-            cand->fit.rmsX, cand->fit.rmsY);
+            charge, emittedQOverP, state(3), state(2), state(0), state(1), cand->fit.rmsX,
+            cand->fit.rmsY);
     }
   }
 }

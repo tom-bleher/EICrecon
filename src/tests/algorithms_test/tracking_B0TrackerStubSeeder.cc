@@ -4,17 +4,23 @@
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <Eigen/Dense>
 #include <cmath>
 #include <vector>
 
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
 
 using Catch::Approx;
-using eicrecon::b0stub::chargeFromCurvature;
+using eicrecon::b0stub::covarianceModelAdditions;
+using eicrecon::b0stub::endpointCompatibility;
+using eicrecon::b0stub::FieldIntegralFit;
+using eicrecon::b0stub::FieldSample;
+using eicrecon::b0stub::fitFieldIntegral;
 using eicrecon::b0stub::fitStub;
-using eicrecon::b0stub::momentumFromCurvature;
+using eicrecon::b0stub::integrateFieldSamples;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
+using eicrecon::b0stub::seedCovarianceFromFit;
 using eicrecon::b0stub::StubFit;
 
 namespace {
@@ -23,10 +29,11 @@ namespace {
 constexpr std::array<double, 4> kStationZ{5902.0, 6172.0, 6442.0, 6712.0};
 
 /// Sample a parabola/line trajectory at the B0 stations.
-std::vector<Point3> sampleTrack(double c0, double c1, double c2, double b0, double b1) {
+std::vector<Point3> sampleTrack(double c0, double c1, double c2, double b0, double b1,
+                                double varianceX = 0.0, double varianceY = 0.0) {
   std::vector<Point3> pts;
   for (double z : kStationZ) {
-    pts.push_back({c0 + c1 * z + c2 * z * z, b0 + b1 * z, z});
+    pts.push_back({c0 + c1 * z + c2 * z * z, b0 + b1 * z, z, varianceX, varianceY});
   }
   return pts;
 }
@@ -67,39 +74,167 @@ TEST_CASE("B0 stub fit rejects degenerate z", "[B0TrackerStubSeeder]") {
   CHECK_FALSE(fitStub(pts).valid);
 }
 
-TEST_CASE("B0 sagitta returns the generating momentum and charge", "[B0TrackerStubSeeder]") {
-  const double By = 1.184; // B0pf nominal [T]
+TEST_CASE("B0 stub fit rejects a rank-deficient quadratic", "[B0TrackerStubSeeder]") {
+  std::vector<Point3> pts{
+      {0.0, 0.0, 5902.0}, {1.0, 0.0, 5902.0}, {2.0, 0.0, 6172.0}, {3.0, 0.0, 6172.0}};
+  CHECK_FALSE(fitStub(pts).valid);
+}
 
-  // d(tx)/dz = -q * 2.998e-4 * By / p, so c2 = 0.5 * that.
-  auto curvature = [&](double p, int q) { return -0.5 * q * 2.998e-4 * By / p; };
-
-  SECTION("41 GeV proton") {
-    const double p    = 41.0;
-    const double c2   = curvature(p, +1);
-    const StubFit fit = fitStub(sampleTrack(12.5, -3.0e-3, c2, 0.0, 0.0));
-    REQUIRE(fit.valid);
-    CHECK(momentumFromCurvature(fit.c2, By) == Approx(p).epsilon(1e-4));
-    CHECK(chargeFromCurvature(fit.c2, By) == +1);
+TEST_CASE("B0 weighted fit derives coefficient covariance", "[B0TrackerStubSeeder]") {
+  constexpr double varianceX = 4.0e-4;
+  constexpr double varianceY = 9.0e-4;
+  const StubFit fit =
+      fitStub(sampleTrack(12.5, -3.0e-3, -4.0e-6, -1.5, 2.0e-3, varianceX, varianceY));
+  REQUIRE(fit.valid);
+  REQUIRE(fit.covarianceValid);
+  for (int i = 0; i < 3; ++i) {
+    CHECK(fit.covarianceX[3 * i + i] > 0.0);
+  }
+  for (int i = 0; i < 2; ++i) {
+    CHECK(fit.covarianceY[2 * i + i] > 0.0);
   }
 
-  SECTION("5 GeV pi-") {
-    const double p    = 5.0;
-    const double c2   = curvature(p, -1);
-    const StubFit fit = fitStub(sampleTrack(12.5, -3.0e-3, c2, 0.0, 0.0));
-    REQUIRE(fit.valid);
-    CHECK(momentumFromCurvature(fit.c2, By) == Approx(p).epsilon(1e-4));
-    CHECK(chargeFromCurvature(fit.c2, By) == -1);
-  }
+  const StubFit scaled =
+      fitStub(sampleTrack(12.5, -3.0e-3, -4.0e-6, -1.5, 2.0e-3, 4.0 * varianceX, 4.0 * varianceY));
+  REQUIRE(scaled.covarianceValid);
+  CHECK(scaled.covarianceX[8] == Approx(4.0 * fit.covarianceX[8]).epsilon(1e-10));
+  CHECK(scaled.covarianceY[3] == Approx(4.0 * fit.covarianceY[3]).epsilon(1e-10));
+}
 
-  SECTION("charge inference follows the field sign") {
-    const double c2 = curvature(41.0, +1);
-    CHECK(chargeFromCurvature(c2, By) == +1);
-    CHECK(chargeFromCurvature(c2, -By) == -1);
-  }
+TEST_CASE("B0 three-station fit retains measurement covariance", "[B0TrackerStubSeeder]") {
+  auto points = sampleTrack(12.5, -3.0e-3, -4.0e-6, -1.5, 2.0e-3, 4.0e-4, 4.0e-4);
+  points.pop_back();
+  const StubFit fit = fitStub(points);
+  REQUIRE(fit.valid);
+  REQUIRE(fit.covarianceValid);
+  CHECK(fit.covarianceX[8] > 0.0);
+  CHECK(fit.rmsX == Approx(0.0).margin(1e-6));
+}
 
-  SECTION("a straight track has no measurable momentum") {
-    CHECK(momentumFromCurvature(0.0, By) == 0.0);
+TEST_CASE("B0 field quadrature is exact for a linear field", "[B0TrackerStubSeeder]") {
+  constexpr double z0       = 5800.0;
+  constexpr double field0   = 1.1;
+  constexpr double gradient = 2.0e-4;
+  std::vector<FieldSample> samples;
+  for (double z : {z0, 5902.0, 6172.0, 6712.0}) {
+    samples.push_back({z, field0 + gradient * (z - z0)});
   }
+  const auto moments = integrateFieldSamples(samples);
+  REQUIRE(moments.size() == samples.size());
+  for (std::size_t i = 0; i < samples.size(); ++i) {
+    const double dz = samples[i].z - z0;
+    CHECK(moments[i].first == Approx(field0 * dz + 0.5 * gradient * dz * dz).epsilon(1e-12));
+    CHECK(moments[i].second ==
+          Approx(0.5 * field0 * dz * dz + gradient * dz * dz * dz / 6.0).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("B0 field-integral fit recovers signed q over p", "[B0TrackerStubSeeder]") {
+  constexpr double zEntrance  = 5800.0;
+  constexpr double fieldY     = 1.184;
+  constexpr double qOverP     = 1.0 / 41.0;
+  constexpr double xEntrance  = -2.5;
+  constexpr double txEntrance = -1.0e-3;
+  constexpr double kBend      = 2.998e-4;
+  std::vector<Point3> points;
+  std::vector<double> integrals;
+  for (double z : kStationZ) {
+    const double dz       = z - zEntrance;
+    const double integral = 0.5 * fieldY * dz * dz;
+    points.push_back({xEntrance + txEntrance * dz - kBend * qOverP * integral, -1.5 + 2.0e-3 * z, z,
+                      4.0e-4, 9.0e-4});
+    integrals.push_back(integral);
+  }
+  const FieldIntegralFit fit = fitFieldIntegral(points, integrals, zEntrance);
+  REQUIRE(fit.valid);
+  REQUIRE(fit.covarianceValid);
+  CHECK(fit.xReference == Approx(xEntrance).margin(1e-10));
+  CHECK(fit.txReference == Approx(txEntrance).margin(1e-12));
+  CHECK(fit.qOverP == Approx(qOverP).epsilon(1e-10));
+  CHECK(fit.rmsX == Approx(0.0).margin(1e-10));
+
+  auto scaledPoints = points;
+  for (auto& point : scaledPoints) {
+    point.varianceX *= 4.0;
+  }
+  const auto scaled = fitFieldIntegral(scaledPoints, integrals, zEntrance);
+  REQUIRE(scaled.covarianceValid);
+  CHECK(scaled.covariance[8] == Approx(4.0 * fit.covariance[8]).epsilon(1e-10));
+}
+
+TEST_CASE("B0 endpoint pruning keeps prompt pairs and rejects cross-pairs",
+          "[B0TrackerStubSeeder]") {
+  const Point3 promptFirst{0.0, 12.0, 5902.0};
+  const Point3 promptLast{0.0, 12.0 * 6712.0 / 5902.0, 6712.0};
+  const auto prompt = endpointCompatibility(promptFirst, promptLast, 0.10, 5.0, true);
+  REQUIRE(prompt.valid);
+  CHECK(prompt.beamResidual == Approx(0.0).margin(1e-12));
+
+  // This pair has a modest slope but extrapolates far from the beamline.
+  const auto cross =
+      endpointCompatibility({0.0, 100.0, 5902.0}, {0.0, 105.0, 6712.0}, 0.10, 5.0, true);
+  CHECK_FALSE(cross.valid);
+  const auto unconstrained =
+      endpointCompatibility({0.0, 100.0, 5902.0}, {0.0, 105.0, 6712.0}, 0.10, 5.0, false);
+  CHECK(unconstrained.valid);
+
+  CHECK_FALSE(
+      endpointCompatibility({0.0, 0.0, 5902.0}, {0.0, 100.0, 6000.0}, 0.10, 5.0, true).valid);
+  CHECK_FALSE(endpointCompatibility(promptLast, promptFirst, 0.10, 5.0, true).valid);
+}
+
+TEST_CASE("B0 calibrated covariance additions include material and field terms",
+          "[B0TrackerStubSeeder]") {
+  constexpr double qOverP = 0.04;
+  const auto additions =
+      covarianceModelAdditions(qOverP, 1.0e-5, 0.15, 2.0e-9, 1.0e-3, 4.0e-8, 0.02, 0.01);
+  CHECK(additions[0] == Approx(1.0e-5 + std::pow(0.15 * qOverP, 2)).epsilon(1e-12));
+  CHECK(additions[1] == Approx(2.0e-9 + std::pow(1.0e-3 * qOverP, 2)).epsilon(1e-12));
+  CHECK(additions[2] ==
+        Approx(4.0e-8 + (0.02 * 0.02 + 0.01 * 0.01) * qOverP * qOverP).epsilon(1e-12));
+
+  const auto opposite =
+      covarianceModelAdditions(-qOverP, 1.0e-5, 0.15, 2.0e-9, 1.0e-3, 4.0e-8, 0.02, 0.01);
+  CHECK(opposite == additions);
+}
+
+TEST_CASE("B0 field-fit covariance propagates to correlated seed parameters",
+          "[B0TrackerStubSeeder]") {
+  constexpr double zEntrance = 5800.0;
+  constexpr double fieldY    = 1.184;
+  constexpr double qOverP    = 1.0 / 41.0;
+  constexpr double kBend     = 2.998e-4;
+  std::vector<Point3> points;
+  std::vector<double> integrals;
+  for (double z : kStationZ) {
+    const double dz       = z - zEntrance;
+    const double integral = 0.5 * fieldY * dz * dz;
+    points.push_back(
+        {-2.5 - 1.0e-3 * dz - kBend * qOverP * integral, -1.5 + 2.0e-3 * z, z, 4.0e-4, 4.0e-4});
+    integrals.push_back(integral);
+  }
+  const StubFit nonBendFit       = fitStub(points);
+  const FieldIntegralFit bendFit = fitFieldIntegral(points, integrals, zEntrance);
+  REQUIRE(nonBendFit.covarianceValid);
+  REQUIRE(bendFit.covarianceValid);
+  const auto flat = seedCovarianceFromFit(bendFit, nonBendFit, -0.025, true);
+
+  Eigen::Matrix<double, 5, 5> covariance;
+  for (int row = 0; row < 5; ++row) {
+    for (int col = 0; col < 5; ++col) {
+      covariance(row, col) = flat[5 * row + col];
+      CHECK(std::isfinite(flat[5 * row + col]));
+      CHECK(flat[5 * row + col] == Approx(flat[5 * col + row]).margin(1e-15));
+    }
+  }
+  CHECK(covariance(2, 2) > 0.0);
+  CHECK(covariance(3, 3) > 0.0);
+  CHECK(covariance(4, 4) > 0.0);
+  CHECK(std::abs(covariance(3, 4)) > 0.0);
+  CHECK(covariance(4, 4) == Approx(bendFit.covariance[8]).epsilon(1e-8));
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 5, 5>> solver(covariance);
+  REQUIRE(solver.info() == Eigen::Success);
+  CHECK(solver.eigenvalues().minCoeff() >= Approx(0.0).margin(1e-12));
 }
 
 TEST_CASE("B0 perigee parameters of a ray through the origin", "[B0TrackerStubSeeder]") {
