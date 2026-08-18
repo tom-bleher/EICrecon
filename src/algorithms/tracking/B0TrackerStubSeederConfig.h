@@ -120,6 +120,21 @@ struct B0TrackerStubSeederConfig {
   // Derived from 5k-event proton-gun samples at 15, 25, 35, and 41 GeV and
   // validated at 20, 30, and 38 GeV. These diagonal additions supplement,
   // rather than replace, the propagated hit-measurement covariance.
+  //
+  // Provenance of the values below -- regenerate with
+  // presentation16/calibrate_b0_seed_covariance.py before changing them:
+  //   calibration artifact : presentation16/assets/b0_seed_covariance/calibration.json
+  //                          sha256 e039bbc0d9378776cb7c757873b459fcaad1ae275a471dd
+  //                                 23038104e834595e8
+  //   reconstruction run   : presentation16/b0_covariance_validation_20260817
+  //   simulation input     : presentation14/run_p14dev_pcurve_20260814_134439
+  //   geometry             : presentation14/p14dev_detector_20260814_124519
+  //                          (epic @ b0-tracker-realistic-geometry, epic_ip6_extended)
+  //   material map         : pg_p14dev_p41_6b9ec99108/material-map.cbor
+  //                          sha256 74a4b052e1154b5b2babe708944ec04fe838faafd83b79a
+  //                                 8d7c53716c6e654a3
+  // The constants are only valid for that geometry/field/material combination;
+  // a geometry change invalidates them and requires a re-calibration.
   /// Momentum-independent residual phi variance [rad^2].
   float phiModelVariance = 1.934e-5;
   /// Coefficient of the material/model term sigma(phi) = scale * |q/p| [GeV rad].
