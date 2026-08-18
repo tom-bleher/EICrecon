@@ -1220,7 +1220,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       trackparam.setPhi(static_cast<float>(state(2)));
       trackparam.setTheta(static_cast<float>(state(3)));
       trackparam.setQOverP(static_cast<float>(emittedQOverP));
-      trackparam.setTime(10);
+      trackparam.setTime(m_cfg.seedTime);
 
       edm4eic::Cov6f cov;
       for (int row = 0; row < 5; ++row) {

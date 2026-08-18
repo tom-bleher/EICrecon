@@ -109,6 +109,13 @@ struct B0TrackerStubSeederConfig {
   float qOverPVariance = 2.0e-4;
   float timeVariance   = 100.0;
 
+  /// Seed time prior [ns], paired with the deliberately loose timeVariance
+  /// above. B0 has no timing digitization yet -- the generic silicon front end
+  /// only smears the Geant4 time -- so this is an explicit prior rather than an
+  /// estimate. Replace with a hit-derived, time-of-flight-corrected estimator
+  /// once a real AC-LGAD timing response exists.
+  float seedTime = 10.0;
+
   // --- calibrated field/material/model additions ---
   // Derived from 5k-event proton-gun samples at 15, 25, 35, and 41 GeV and
   // validated at 20, 30, and 38 GeV. These diagonal additions supplement,

@@ -83,6 +83,8 @@ private:
                                        "fallback seed q/p variance"};
   ParameterRef<float> m_timeVariance{this, "timeVariance", config().timeVariance,
                                      "seed time variance"};
+  ParameterRef<float> m_seedTime{this, "seedTime", config().seedTime,
+                                 "seed time prior [ns] (no B0 timing digitization yet)"};
   ParameterRef<float> m_phiModelVariance{this, "phiModelVariance", config().phiModelVariance,
                                          "calibrated residual phi variance"};
   ParameterRef<float> m_phiQOverPScale{this, "phiQOverPScale", config().phiQOverPScale,
