@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Eigen/Dense>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
@@ -335,4 +336,51 @@ TEST_CASE("B0 cached stations drop mid-gap hits instead of inventing a station",
 
   const auto eventContent = groupHitsByStation(hitZ, {}, gap);
   CHECK(eventContent.size() == 5);
+}
+
+TEST_CASE("B0 charge hypotheses cover the unresolved-curvature limit", "[B0TrackerStubSeeder]") {
+  using eicrecon::b0stub::chargeHypotheses;
+  const double minSignificance = 3.0;
+
+  SECTION("a significant negative curvature resolves to one negative hypothesis") {
+    const auto charges = chargeHypotheses(-0.1, 1.0e-4, minSignificance, -1, false, 0);
+    REQUIRE(charges == std::vector<int>{-1});
+  }
+  SECTION("a significant positive curvature resolves to one positive hypothesis") {
+    const auto charges = chargeHypotheses(0.1, 1.0e-4, minSignificance, +1, false, 0);
+    REQUIRE(charges == std::vector<int>{1});
+  }
+  SECTION("a low-significance curvature emits both hypotheses") {
+    const auto charges = chargeHypotheses(0.001, 1.0e-4, minSignificance, +1, false, 0);
+    REQUIRE(charges == std::vector<int>{-1, 1});
+  }
+  SECTION("exactly zero curvature emits both hypotheses") {
+    // Regression: the old `qOverP != 0` guard let this fall through to a
+    // ternary on zero, silently emitting only the positive hypothesis at the
+    // point of maximal charge ambiguity.
+    const auto charges = chargeHypotheses(0.0, 1.0e-4, minSignificance, +1, false, 0);
+    REQUIRE(charges == std::vector<int>{-1, 1});
+  }
+  SECTION("a zero variance is unresolved, not infinitely significant") {
+    const auto charges = chargeHypotheses(0.1, 0.0, minSignificance, +1, false, 0);
+    REQUIRE(charges == std::vector<int>{-1, 1});
+  }
+  SECTION("a negative variance is unresolved") {
+    const auto charges = chargeHypotheses(0.1, -1.0, minSignificance, +1, false, 0);
+    REQUIRE(charges == std::vector<int>{-1, 1});
+  }
+  SECTION("a non-finite curvature or variance is unresolved") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    REQUIRE(chargeHypotheses(nan, 1.0e-4, minSignificance, +1, false, 0) ==
+            std::vector<int>{-1, 1});
+    REQUIRE(chargeHypotheses(0.1, nan, minSignificance, +1, false, 0) == std::vector<int>{-1, 1});
+  }
+  SECTION("an explicitly configured charge overrides the curvature") {
+    REQUIRE(chargeHypotheses(0.0, 1.0e-4, minSignificance, +1, false, -1) == std::vector<int>{-1});
+    REQUIRE(chargeHypotheses(-0.1, 1.0e-4, minSignificance, -1, false, +1) == std::vector<int>{1});
+  }
+  SECTION("testBothCharges wins over everything") {
+    REQUIRE(chargeHypotheses(0.1, 1.0e-9, minSignificance, +1, true, -1) ==
+            std::vector<int>{-1, 1});
+  }
 }

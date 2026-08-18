@@ -609,6 +609,27 @@ namespace b0stub {
     return result;
   }
 
+  std::vector<int> chargeHypotheses(double qOverP, double qOverPVariance,
+                                    double minCurvatureSignificance, int inferredCharge,
+                                    bool testBothCharges, int configuredCharge) {
+    if (testBothCharges) {
+      return {-1, 1};
+    }
+    if (configuredCharge == -1 || configuredCharge == 1) {
+      return {configuredCharge};
+    }
+    // A charge sign is only resolved by a curvature that is significantly
+    // non-zero. Exactly zero curvature, and a variance that is non-positive or
+    // non-finite, are both maximally ambiguous.
+    const bool measurable = std::isfinite(qOverP) && qOverP != 0.0 &&
+                            std::isfinite(qOverPVariance) && qOverPVariance > 0.0;
+    const double significance = measurable ? std::abs(qOverP) / std::sqrt(qOverPVariance) : 0.0;
+    if (significance < minCurvatureSignificance) {
+      return {-1, 1};
+    }
+    return {inferredCharge};
+  }
+
 } // namespace b0stub
 
 void B0TrackerStubSeeder::init() {
@@ -1161,20 +1182,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const SeedMatrix fitCovariance = propagateFitCovariance(
         cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline);
 
-    std::vector<int> charges;
-    if (m_cfg.testBothCharges) {
-      charges = {-1, 1};
-    } else if (m_cfg.charge == -1 || m_cfg.charge == 1) {
-      charges = {m_cfg.charge};
-    } else {
-      const double significance =
-          std::abs(cand->qOverP) / std::sqrt(std::max(cand->qOverPVariance, 0.0));
-      if (cand->qOverP != 0.0 && significance < m_cfg.minCurvatureSignificance) {
-        charges = {-1, 1};
-      } else {
-        charges = {cand->inferredCharge};
-      }
-    }
+    const std::vector<int> charges =
+        b0stub::chargeHypotheses(cand->qOverP, cand->qOverPVariance, m_cfg.minCurvatureSignificance,
+                                 cand->inferredCharge, m_cfg.testBothCharges, m_cfg.charge);
 
     for (const int charge : charges) {
       if (emitted >= m_cfg.maxSeeds) {

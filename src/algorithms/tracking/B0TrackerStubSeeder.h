@@ -156,6 +156,20 @@ namespace b0stub {
   groupHitsByStation(const std::vector<double>& hitZ, const std::vector<StationInterval>& stations,
                      double gap);
 
+  /// Charge hypotheses to emit for one stub candidate.
+  ///
+  /// The sign of the charge is only known if the fitted curvature is
+  /// significantly non-zero. Exactly zero curvature and a non-positive or
+  /// non-finite variance are maximally ambiguous and must yield both
+  /// hypotheses -- inheriting the sign convention of a ternary on zero would
+  /// silently drop every negative candidate at the ambiguous limit.
+  ///
+  /// `configuredCharge` of -1 or +1 pins the charge; any other value leaves it
+  /// to the curvature. `testBothCharges` forces both regardless.
+  std::vector<int> chargeHypotheses(double qOverP, double qOverPVariance,
+                                    double minCurvatureSignificance, int inferredCharge,
+                                    bool testBothCharges, int configuredCharge);
+
 } // namespace b0stub
 
 using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
