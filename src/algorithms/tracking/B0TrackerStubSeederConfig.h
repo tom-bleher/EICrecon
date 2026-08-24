@@ -7,13 +7,14 @@ namespace eicrecon {
 
 /// Configuration for the B0 stub seeder.
 ///
-/// The B0 tracker sits inside the B0pf dipole (field along y), where the
-/// solenoid-model helix estimation of the orthogonal seeder returns invalid
-/// parameters (random charge sign). This seeder instead fits the hits of the
-/// four B0 stations directly: a straight line in the non-bend plane and a
-/// sampled field-integral model in the bend plane, giving direction and signed q/p, then
-/// back-extrapolates analytically to the origin perigee that CKFTracking
-/// expects.
+/// The B0 tracker sits inside the B0pf combined-function magnet (dipole along
+/// y plus a quadrupole gradient), where the solenoid-model helix estimation of
+/// the orthogonal seeder returns invalid parameters (random charge sign). This
+/// seeder instead fits the hits of the four B0 stations directly with a
+/// sampled field-integral model: the bend plane gives direction and signed
+/// q/p, the quadrupole term Bx = G*y is removed from the non-bend plane, and
+/// the result is back-extrapolated analytically to the origin perigee that
+/// CKFTracking expects.
 struct B0TrackerStubSeederConfig {
 
   // --- geometry / field ---
@@ -27,10 +28,9 @@ struct B0TrackerStubSeederConfig {
   /// B0PF_XPosition. A positive value overrides that for diagnostics.
   float zFieldEntrance = 0.0;
   /// Minimum number of ACTS field mesh points from the B0pf entrance through
-  /// the outermost selected station; all selected hit positions are added too.
-  unsigned int fieldSamples = 5;
-  /// Fit once on the parabola reference path, then repeat on the fitted path.
-  unsigned int fieldFitIterations = 2;
+  /// the outermost selected station; all selected hit positions and a few
+  /// points just inside the entrance (to resolve the field edge) are added too.
+  unsigned int fieldSamples = 9;
 
   // --- seeding logic ---
   /// Hits whose ion-frame z differs by more than this (mm) are different
@@ -78,8 +78,9 @@ struct B0TrackerStubSeederConfig {
   float minCurvatureSignificance = 3.0;
 
   // --- compatibility and ranking ---
-  /// Maximum RMS residual of the y(z) straight-line fit [mm]. This rejects
-  /// cross-station combinations that cannot be one telescope trajectory.
+  /// Maximum RMS residual of the y(z) straight-line fit [mm] after the
+  /// quadrupole (Bx) bending has been removed. This rejects cross-station
+  /// combinations that cannot be one telescope trajectory.
   float maxYResidual = 0.5;
   /// Maximum RMS residual of the x(z) parabola fit [mm].
   float maxXResidual = 2.0;
@@ -107,50 +108,28 @@ struct B0TrackerStubSeederConfig {
   float phiVariance    = 0.01;
   float thetaVariance  = 1.0e-5;
   float qOverPVariance = 2.0e-4;
-  float timeVariance   = 100.0;
+  /// The seed time is the time at the origin perigee, i.e. the vertex time
+  /// (0 ns for prompt tracks); this variance keeps it unconstrained until B0
+  /// has a timing digitization.
+  float timeVariance = 100.0;
 
-  /// Seed time prior [ns], paired with the deliberately loose timeVariance
-  /// above. B0 has no timing digitization yet -- the generic silicon front end
-  /// only smears the Geant4 time -- so this is an explicit prior rather than an
-  /// estimate. Replace with a hit-derived, time-of-flight-corrected estimator
-  /// once a real AC-LGAD timing response exists.
-  float seedTime = 10.0;
-
-  // --- calibrated field/material/model additions ---
-  // Derived from 5k-event proton-gun samples at 15, 25, 35, and 41 GeV and
-  // validated at 20, 30, and 38 GeV. These diagonal additions supplement,
-  // rather than replace, the propagated hit-measurement covariance.
-  //
-  // Provenance of the values below -- regenerate with
-  // presentation16/calibrate_b0_seed_covariance.py before changing them:
-  //   calibration artifact : presentation16/assets/b0_seed_covariance/calibration.json
-  //                          sha256 e039bbc0d9378776cb7c757873b459fcaad1ae275a471dd
-  //                                 23038104e834595e8
-  //   reconstruction run   : presentation16/b0_covariance_validation_20260817
-  //   simulation input     : presentation14/run_p14dev_pcurve_20260814_134439
-  //   geometry             : presentation14/p14dev_detector_20260814_124519
-  //                          (epic @ b0-tracker-realistic-geometry, epic_ip6_extended)
-  //   material map         : pg_p14dev_p41_6b9ec99108/material-map.cbor
-  //                          sha256 74a4b052e1154b5b2babe708944ec04fe838faafd83b79a
-  //                                 8d7c53716c6e654a3
-  // The constants are only valid for that geometry/field/material combination;
-  // a geometry change invalidates them and requires a re-calibration.
-  /// Momentum-independent residual phi variance [rad^2].
-  float phiModelVariance = 1.934e-5;
-  /// Coefficient of the material/model term sigma(phi) = scale * |q/p| [GeV rad].
-  float phiQOverPScale = 0.1360;
-  /// Momentum-independent residual theta variance [rad^2].
-  float thetaModelVariance = 2.201e-9;
-  /// Coefficient of the material/model term sigma(theta) = scale * |q/p| [GeV rad].
-  float thetaQOverPScale = 1.043e-3;
-  /// Momentum-independent residual q/p variance [(1/GeV)^2].
-  float qOverPModelVariance = 6.290e-8;
-  /// Relative residual q/p uncertainty from the trajectory model.
-  float qOverPRelativeUncertainty = 0.02253;
-  /// External relative B-field integral uncertainty. The calibration samples
-  /// use the same map in simulation and reconstruction, so this is not
-  /// identifiable there and deliberately defaults to zero.
-  float fieldRelativeUncertainty = 0.0;
+  // --- search window added to the propagated hit covariance ---
+  // The propagated measurement covariance describes the seed's own error:
+  // measured on a proton-gun sample (8-41 GeV, ion-frame 4-22 mrad,
+  // epic_ip6_extended with the realistic B0 modules) the seed direction is
+  // good to 13-24 urad and q/p to 2.4-4.3 %, of which multiple scattering
+  // contributes about 3e-4 GeV rad * |q/p| and 2-3 % of q/p. CKFTracking,
+  // however, only attaches the B0 hits reliably when the seed covariance is
+  // much wider than that: on the same sample the CKF efficiency rises
+  // monotonically with the window and saturates at the values below (about
+  // 30x the intrinsic angular error), with unchanged fitted-momentum quality.
+  // These are therefore CKF search windows, not error estimates; the pulls
+  // of the emitted seeds are far below one by construction.
+  /// Angular window coefficient [GeV rad]: sigma = scale * |q/p| is added to
+  /// theta and, divided by sin(theta), to phi.
+  float angularWindowScale = 1.6e-2;
+  /// Relative q/p window added in quadrature.
+  float qOverPWindow = 0.1;
 };
 
 } // namespace eicrecon

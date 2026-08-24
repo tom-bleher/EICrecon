@@ -70,7 +70,7 @@ namespace b0stub {
 
   struct FieldSample {
     double z{};      ///< ion-frame position [mm]
-    double fieldY{}; ///< dipole field [T]
+    double fieldY{}; ///< ion-frame field component integrated [T]
   };
 
   struct FieldIntegral {
@@ -109,14 +109,24 @@ namespace b0stub {
                                               double maxAbsSlope, double maxBeamResidual,
                                               bool constrainToBeamline);
 
-  /// Diagonal (phi, theta, q/p) variance additions for calibrated residual and
-  /// external field-integral uncertainties.
-  std::array<double, 3> covarianceModelAdditions(double qOverP, double phiModelVariance,
-                                                 double phiQOverPScale, double thetaModelVariance,
-                                                 double thetaQOverPScale,
-                                                 double qOverPModelVariance,
-                                                 double qOverPRelativeUncertainty,
-                                                 double fieldRelativeUncertainty);
+  /// Remove the quadrupole bending y'' = kappa (q/p) Bx from the non-bend
+  /// coordinates so that a straight line describes the field-free upstream
+  /// trajectory. `secondIntegralsX` are the (z-s) Bx moments at the points,
+  /// referenced to the field entrance.
+  std::vector<Point3> removeNonBendCurvature(const std::vector<Point3>& pts,
+                                             const std::vector<double>& secondIntegralsX,
+                                             double qOverP);
+
+  /// Diagonal (phi, theta, q/p) variance additions forming the CKF search
+  /// window, both scaling with |q/p|.
+  std::array<double, 3> windowCovarianceAdditions(double qOverP, double theta,
+                                                  double angularWindowScale, double qOverPWindow);
+
+  /// Seed parameters (loc0, loc1, phi, theta, q/p) on the origin perigee from
+  /// the bend and non-bend fits, in the lab frame.
+  std::array<double, 5> seedParametersFromFit(const FieldIntegralFit& bendFit,
+                                              const StubFit& nonBendFit, double crossingAngle,
+                                              bool constrainToBeamline);
 
   /// Propagate the fitted coefficient covariance to
   /// (loc0,loc1,phi,theta,q/p), returned as a row-major 5x5 matrix.
@@ -178,11 +188,11 @@ using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
 
 /// Dedicated seeder for the B0 tracker (dipole spectrometer at z ~ 6 m).
 ///
-/// Fits one hit per station with a straight line (non-bend plane) and a
-/// sampled field-integral basis (bend plane) in the ion-rotated frame, extracts direction,
-/// signed q/p (from the sampled dipole field integral), back-extrapolates
-/// analytically to the origin, and emits seed parameters on the origin
-/// perigee surface that CKFTracking expects.
+/// Fits one hit per station in the ion-rotated frame with a sampled
+/// field-integral basis: signed q/p and direction from the bend plane, the
+/// quadrupole Bx bending removed from the non-bend plane, then back-extrapolates
+/// analytically to the origin and emits seed parameters on the origin perigee
+/// surface that CKFTracking expects.
 class B0TrackerStubSeeder : public B0TrackerStubSeederAlgorithm,
                             public WithPodConfig<B0TrackerStubSeederConfig> {
 public:
@@ -199,6 +209,11 @@ private:
   std::shared_ptr<const ActsGeometryProvider> m_acts_context;
   double m_crossing_angle{};
   double m_z_field_entrance{};
+  /// Lab z of the B0pf entrance face when derived from the magnet geometry
+  /// (0 when zFieldEntrance is configured explicitly). The magnet is not
+  /// rotated with the beam, so its face is a plane of constant lab z whose
+  /// ion-frame z depends on the track's x.
+  double m_z_face_lab{0.0};
   std::vector<b0stub::StationInterval> m_stations;
   std::unordered_map<std::uint64_t, unsigned int> m_volume_to_station;
 };

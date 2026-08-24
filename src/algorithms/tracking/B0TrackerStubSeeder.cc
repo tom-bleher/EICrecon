@@ -11,11 +11,13 @@
 //
 //   1. rotate hits into the ion frame (crossing angle about y), where the
 //      dipole bend lies purely in the x-z plane;
-//   2. fit y(z) with a line and use a bend-plane parabola only to initialize
-//      sampling of the full field along each candidate;
+//   2. fit y(z) with a line and x(z) with a parabola only to define the path
+//      along which the full field (Bx, By) is sampled for each candidate;
 //   3. fit x(z) in the sampled field-integral basis for signed q/p and local
-//      direction, then back-extrapolate and express the result on the origin perigee
-//      surface, which is what CKFTracking hard-codes as seed reference.
+//      direction, remove the quadrupole bending kappa (q/p) Bx from y(z) and
+//      refit the line, then back-extrapolate and express the result on the
+//      origin perigee surface, which is what CKFTracking hard-codes as seed
+//      reference.
 //
 // The seed is only a starting point: the CKF refits with the full field and
 // material, so the stub q/p must not be read as a final measurement. Because
@@ -311,21 +313,27 @@ namespace b0stub {
     return result;
   }
 
-  std::array<double, 3> covarianceModelAdditions(double qOverP, double phiModelVariance,
-                                                 double phiQOverPScale, double thetaModelVariance,
-                                                 double thetaQOverPScale,
-                                                 double qOverPModelVariance,
-                                                 double qOverPRelativeUncertainty,
-                                                 double fieldRelativeUncertainty) {
-    const double qOverP2 = qOverP * qOverP;
-    return {
-        std::max(phiModelVariance, 0.0) + phiQOverPScale * phiQOverPScale * qOverP2,
-        std::max(thetaModelVariance, 0.0) + thetaQOverPScale * thetaQOverPScale * qOverP2,
-        std::max(qOverPModelVariance, 0.0) +
-            (qOverPRelativeUncertainty * qOverPRelativeUncertainty +
-             fieldRelativeUncertainty * fieldRelativeUncertainty) *
-                qOverP2,
-    };
+  std::vector<Point3> removeNonBendCurvature(const std::vector<Point3>& pts,
+                                             const std::vector<double>& secondIntegralsX,
+                                             double qOverP) {
+    constexpr double kBend        = 2.998e-4;
+    std::vector<Point3> corrected = pts;
+    if (secondIntegralsX.size() != pts.size() || !std::isfinite(qOverP)) {
+      return corrected;
+    }
+    // y'' = +kappa (q/p) Bx, the counterpart of x'' = -kappa (q/p) By.
+    for (std::size_t i = 0; i < corrected.size(); ++i) {
+      corrected[i].y -= kBend * qOverP * secondIntegralsX[i];
+    }
+    return corrected;
+  }
+
+  std::array<double, 3> windowCovarianceAdditions(double qOverP, double theta,
+                                                  double angularWindowScale, double qOverPWindow) {
+    const double angle   = angularWindowScale * std::abs(qOverP);
+    const double sinTh   = std::max(std::abs(std::sin(theta)), 1.0e-6);
+    const double relQopS = qOverPWindow * qOverP;
+    return {angle * angle / (sinTh * sinTh), angle * angle, relQopS * relQopS};
   }
 
   PerigeeParams perigeeFromRay(const Point3& ref, const Point3& dir, const Point3& perigee) {
@@ -373,8 +381,8 @@ namespace b0stub {
     std::sort(ordered.begin(), ordered.end());
 
     StationInterval current{ordered.front(), ordered.front(), ordered.front()};
-    double sum     = ordered.front();
-    std::size_t n  = 1;
+    double sum    = ordered.front();
+    std::size_t n = 1;
     for (std::size_t i = 1; i < ordered.size(); ++i) {
       if (ordered[i] - current.zMax > gap) {
         current.zMean = sum / static_cast<double>(n);
@@ -595,6 +603,14 @@ namespace {
 
 namespace b0stub {
 
+  std::array<double, 5> seedParametersFromFit(const FieldIntegralFit& bendFit,
+                                              const StubFit& nonBendFit, double crossingAngle,
+                                              bool constrainToBeamline) {
+    const SeedVector state =
+        seedStateFromFit(bendFit, nonBendFit, crossingAngle, constrainToBeamline);
+    return {state(0), state(1), state(2), state(3), state(4)};
+  }
+
   std::array<double, 25> seedCovarianceFromFit(const FieldIntegralFit& bendFit,
                                                const StubFit& nonBendFit, double crossingAngle,
                                                bool constrainToBeamline) {
@@ -661,6 +677,7 @@ void B0TrackerStubSeeder::init() {
         xLab = 0.0;
       }
       const double zLab  = zCenter - 0.5 * length;
+      m_z_face_lab       = zLab;
       m_z_field_entrance = xLab * sa + zLab * ca;
     } catch (const std::exception& error) {
       throw std::runtime_error(
@@ -746,8 +763,8 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const auto& p          = hit.getPosition();
     const auto& covariance = hit.getPositionError();
     // TrackerHit position covariance is expressed in the sensor surface frame.
-    // B0's CartesianGridXY sensors rotate with the assembly, so their local
-    // x/y axes are precisely the ion-frame bend/non-bend axes used by this fit.
+    // The B0 sensor planes rotate with the assembly, so their local axes are
+    // precisely the ion-frame bend/non-bend axes used by this fit.
     const b0stub::Point3 q{p.x * ca - p.z * sa, p.y, p.x * sa + p.z * ca, covariance.xx,
                            covariance.yy};
     if (!(std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z))) {
@@ -767,8 +784,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // z-gap clustering is. Hits that do not match a surface station (or, if
   // no surfaces were found, the per-event fallback) are dropped.
   std::map<unsigned int, std::vector<std::size_t>> byStation;
-  const auto* converter =
-      m_volume_to_station.empty() ? nullptr : algorithms::GeoSvc::instance().cellIDPositionConverter();
+  const auto* converter = m_volume_to_station.empty()
+                              ? nullptr
+                              : algorithms::GeoSvc::instance().cellIDPositionConverter();
   if (!m_stations.empty()) {
     for (std::size_t i = 0; i < ion.size(); ++i) {
       int station = -1;
@@ -854,8 +872,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       std::max(1u, m_cfg.maxCombinations / static_cast<unsigned int>(subsets.size()));
 
   auto makeCompatible = [&](StubCandidate& cand) -> bool {
-    if (!cand.fit.valid || cand.fit.rmsX > m_cfg.maxXResidual ||
-        cand.fit.rmsY > m_cfg.maxYResidual) {
+    // The y residual is only tested after the quadrupole bending has been
+    // removed below; the parabola/line here just defines the sampling path.
+    if (!cand.fit.valid || cand.fit.rmsX > m_cfg.maxXResidual) {
       return false;
     }
 
@@ -864,13 +883,24 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                             [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
     const double zFirst = ion[*zMinMax.first].z;
     const double zLast  = ion[*zMinMax.second].z;
-    if (std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope || !(m_z_field_entrance < zFirst)) {
+    // Ion-frame z at which this track crosses the magnet entrance face. The
+    // face is a plane of constant lab z, so its ion z shifts by x_lab * sin(a)
+    // from track to track; ignoring that mis-integrates the hard field edge
+    // and biases the seed direction by tens of microradians.
+    double zEntrance = m_z_field_entrance;
+    if (m_z_face_lab > 0.0) {
+      for (int pass = 0; pass < 2; ++pass) {
+        const double xLab = cand.fit.x(zEntrance) * ca + zEntrance * sa;
+        zEntrance         = xLab * sa + m_z_face_lab * ca;
+      }
+    }
+    if (!std::isfinite(zEntrance) || !(zEntrance < zFirst)) {
       return false;
     }
 
     std::vector<b0stub::Point3> points;
     points.reserve(cand.hitIndices.size());
-    std::vector<double> meshZ{m_z_field_entrance};
+    std::vector<double> meshZ{zEntrance};
     for (const std::size_t idx : cand.hitIndices) {
       points.push_back(ion[idx]);
       meshZ.push_back(ion[idx].z);
@@ -878,7 +908,12 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const unsigned int requestedSamples = std::max(2u, m_cfg.fieldSamples);
     for (unsigned int i = 1; i + 1 < requestedSamples; ++i) {
       const double fraction = static_cast<double>(i) / (requestedSamples - 1);
-      meshZ.push_back(m_z_field_entrance + fraction * (zLast - m_z_field_entrance));
+      meshZ.push_back(zEntrance + fraction * (zLast - zEntrance));
+    }
+    for (const double dz : {1.0, 3.0, 10.0, 30.0}) {
+      if (zEntrance + dz < zFirst) {
+        meshZ.push_back(zEntrance + dz);
+      }
     }
     std::sort(meshZ.begin(), meshZ.end());
     meshZ.erase(std::unique(meshZ.begin(), meshZ.end()), meshZ.end());
@@ -891,68 +926,78 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       return static_cast<std::size_t>(std::distance(meshZ.begin(), found));
     };
 
-    b0stub::FieldIntegralFit previousFit;
-    std::vector<b0stub::FieldIntegral> previousMoments;
-    const unsigned int iterations = std::max(1u, m_cfg.fieldFitIterations);
-    for (unsigned int iteration = 0; iteration < iterations; ++iteration) {
-      std::vector<b0stub::FieldSample> samples;
-      samples.reserve(meshZ.size());
-      double maxAbsFieldY = 0.0;
-      for (std::size_t i = 0; i < meshZ.size(); ++i) {
-        const double z = meshZ[i];
-        double x       = cand.fit.x(z);
-        if (iteration > 0) {
-          constexpr double kBend = 2.998e-4;
-          x = previousFit.xReference + previousFit.txReference * (z - m_z_field_entrance) -
-              kBend * previousFit.qOverP * previousMoments[i].second;
-        }
-        const double y = cand.fit.y(z);
-        const Acts::Vector3 global{x * ca + z * sa, y, -x * sa + z * ca};
-        const auto field = fieldProvider->getField(global, fieldCache);
-        if (!field.ok() || !field.value().allFinite()) {
-          return false;
-        }
-        const double fieldY = field.value().y() / Acts::UnitConstants::T;
-        maxAbsFieldY        = std::max(maxAbsFieldY, std::abs(fieldY));
-        samples.push_back({z, fieldY});
-      }
-      if (maxAbsFieldY < m_cfg.minAbsFieldY) {
+    // Sample the field along the auxiliary path. Bending changes the path by
+    // well under a millimetre over the stations, which is negligible for the
+    // field lookup, so a single pass is used. The entrance sample is taken a
+    // hair inside the magnet: the DD4hep magnet volume is hard-edged and
+    // whether its face counts as inside is floating-point luck.
+    std::vector<b0stub::FieldSample> samplesY;
+    std::vector<b0stub::FieldSample> samplesX;
+    samplesY.reserve(meshZ.size());
+    samplesX.reserve(meshZ.size());
+    double maxAbsFieldY = 0.0;
+    for (std::size_t i = 0; i < meshZ.size(); ++i) {
+      const double z      = meshZ[i];
+      const double zQuery = i == 0 ? z + 1.0e-3 : z;
+      const double x      = cand.fit.x(zQuery);
+      const double y      = cand.fit.y(zQuery);
+      const Acts::Vector3 global{x * ca + zQuery * sa, y, -x * sa + zQuery * ca};
+      const auto field = fieldProvider->getField(global, fieldCache);
+      if (!field.ok() || !field.value().allFinite()) {
         return false;
       }
-
-      const auto moments = b0stub::integrateFieldSamples(samples);
-      if (moments.size() != meshZ.size()) {
-        return false;
-      }
-      std::vector<double> hitIntegrals;
-      hitIntegrals.reserve(points.size());
-      for (const auto& point : points) {
-        const std::size_t index = meshIndex(point.z);
-        if (index == meshZ.size()) {
-          return false;
-        }
-        hitIntegrals.push_back(moments[index].second);
-      }
-      auto fieldFit = b0stub::fitFieldIntegral(points, hitIntegrals, m_z_field_entrance);
-      if (!fieldFit.valid) {
-        return false;
-      }
-      previousFit     = fieldFit;
-      previousMoments = moments;
+      const Acts::Vector3 lab = field.value() / Acts::UnitConstants::T;
+      // Rotate the field into the ion frame, like the positions.
+      const double fieldX = lab.x() * ca - lab.z() * sa;
+      const double fieldY = lab.y();
+      maxAbsFieldY        = std::max(maxAbsFieldY, std::abs(fieldY));
+      samplesY.push_back({z, fieldY});
+      samplesX.push_back({z, fieldX});
     }
-
-    cand.bendFit  = previousFit;
-    cand.fit.rmsX = cand.bendFit.rmsX;
-    if (cand.fit.rmsX > m_cfg.maxXResidual) {
+    if (maxAbsFieldY < m_cfg.minAbsFieldY) {
       return false;
     }
+
+    const auto momentsY = b0stub::integrateFieldSamples(samplesY);
+    const auto momentsX = b0stub::integrateFieldSamples(samplesX);
+    if (momentsY.size() != meshZ.size() || momentsX.size() != meshZ.size()) {
+      return false;
+    }
+    std::vector<double> hitIntegralsY;
+    std::vector<double> hitIntegralsX;
+    hitIntegralsY.reserve(points.size());
+    hitIntegralsX.reserve(points.size());
+    for (const auto& point : points) {
+      const std::size_t index = meshIndex(point.z);
+      if (index == meshZ.size()) {
+        return false;
+      }
+      hitIntegralsY.push_back(momentsY[index].second);
+      hitIntegralsX.push_back(momentsX[index].second);
+    }
+    cand.bendFit = b0stub::fitFieldIntegral(points, hitIntegralsY, zEntrance);
+    if (!cand.bendFit.valid || cand.bendFit.rmsX > m_cfg.maxXResidual) {
+      return false;
+    }
+
+    // Remove the quadrupole bending from the non-bend coordinates and refit
+    // the line, so that it describes the field-free upstream trajectory.
+    const auto corrected =
+        b0stub::removeNonBendCurvature(points, hitIntegralsX, cand.bendFit.qOverP);
+    cand.fit = b0stub::fitStub(corrected);
+    if (!cand.fit.valid || cand.fit.rmsY > m_cfg.maxYResidual ||
+        std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
+      return false;
+    }
+    cand.fit.rmsX = cand.bendFit.rmsX;
+
     const std::size_t firstIndex = meshIndex(zFirst);
     if (firstIndex == meshZ.size()) {
       return false;
     }
     constexpr double kBend = 2.998e-4;
     cand.txFirst =
-        cand.bendFit.txReference - kBend * cand.bendFit.qOverP * previousMoments[firstIndex].first;
+        cand.bendFit.txReference - kBend * cand.bendFit.qOverP * momentsY[firstIndex].first;
     if (std::abs(cand.txFirst) > m_cfg.maxAbsTransverseSlope) {
       return false;
     }
@@ -1206,13 +1251,11 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
           covariance(i, i) = fallbackVariances[i];
         }
       }
-      const auto modelVariances = b0stub::covarianceModelAdditions(
-          emittedQOverP, m_cfg.phiModelVariance, m_cfg.phiQOverPScale, m_cfg.thetaModelVariance,
-          m_cfg.thetaQOverPScale, m_cfg.qOverPModelVariance, m_cfg.qOverPRelativeUncertainty,
-          m_cfg.fieldRelativeUncertainty);
-      covariance(2, 2) += modelVariances[0];
-      covariance(3, 3) += modelVariances[1];
-      covariance(4, 4) += modelVariances[2];
+      const auto window = b0stub::windowCovarianceAdditions(
+          emittedQOverP, state(3), m_cfg.angularWindowScale, m_cfg.qOverPWindow);
+      covariance(2, 2) += window[0];
+      covariance(3, 3) += window[1];
+      covariance(4, 4) += window[2];
 
       auto trackparam = track_params_output->create();
       trackparam.setType(-1); // seed
@@ -1220,7 +1263,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       trackparam.setPhi(static_cast<float>(state(2)));
       trackparam.setTheta(static_cast<float>(state(3)));
       trackparam.setQOverP(static_cast<float>(emittedQOverP));
-      trackparam.setTime(m_cfg.seedTime);
+      trackparam.setTime(0.0F); // vertex time at the origin perigee
 
       edm4eic::Cov6f cov;
       for (int row = 0; row < 5; ++row) {

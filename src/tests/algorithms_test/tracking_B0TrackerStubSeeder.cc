@@ -5,6 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -14,7 +15,6 @@
 using Catch::Approx;
 using eicrecon::b0stub::assignStation;
 using eicrecon::b0stub::clusterStations;
-using eicrecon::b0stub::covarianceModelAdditions;
 using eicrecon::b0stub::endpointCompatibility;
 using eicrecon::b0stub::FieldIntegralFit;
 using eicrecon::b0stub::FieldSample;
@@ -24,8 +24,11 @@ using eicrecon::b0stub::groupHitsByStation;
 using eicrecon::b0stub::integrateFieldSamples;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
+using eicrecon::b0stub::removeNonBendCurvature;
 using eicrecon::b0stub::seedCovarianceFromFit;
+using eicrecon::b0stub::seedParametersFromFit;
 using eicrecon::b0stub::StubFit;
+using eicrecon::b0stub::windowCovarianceAdditions;
 
 namespace {
 
@@ -39,8 +42,8 @@ constexpr std::array<std::array<double, 4>, 2> kGeometries{kOfficialStationZ, kR
 
 /// Sample a parabola/line trajectory at the given stations.
 std::vector<Point3> sampleTrack(double c0, double c1, double c2, double b0, double b1,
-                                const std::array<double, 4>& stations,
-                                double varianceX = 0.0, double varianceY = 0.0) {
+                                const std::array<double, 4>& stations, double varianceX = 0.0,
+                                double varianceY = 0.0) {
   std::vector<Point3> pts;
   for (double z : stations) {
     pts.push_back({c0 + c1 * z + c2 * z * z, b0 + b1 * z, z, varianceX, varianceY});
@@ -202,19 +205,172 @@ TEST_CASE("B0 endpoint pruning keeps prompt pairs and rejects cross-pairs",
   CHECK_FALSE(endpointCompatibility(promptLast, promptFirst, 0.10, 5.0, true).valid);
 }
 
-TEST_CASE("B0 calibrated covariance additions include material and field terms",
+TEST_CASE("B0 window covariance additions scale with q/p and project onto phi",
           "[B0TrackerStubSeeder]") {
   constexpr double qOverP = 0.04;
-  const auto additions =
-      covarianceModelAdditions(qOverP, 1.0e-5, 0.15, 2.0e-9, 1.0e-3, 4.0e-8, 0.02, 0.01);
-  CHECK(additions[0] == Approx(1.0e-5 + std::pow(0.15 * qOverP, 2)).epsilon(1e-12));
-  CHECK(additions[1] == Approx(2.0e-9 + std::pow(1.0e-3 * qOverP, 2)).epsilon(1e-12));
-  CHECK(additions[2] ==
-        Approx(4.0e-8 + (0.02 * 0.02 + 0.01 * 0.01) * qOverP * qOverP).epsilon(1e-12));
+  constexpr double theta  = 0.03;
+  const auto additions    = windowCovarianceAdditions(qOverP, theta, 1.0e-3, 0.02);
+  const double angle2     = std::pow(1.0e-3 * qOverP, 2);
+  CHECK(additions[1] == Approx(angle2).epsilon(1e-12));
+  CHECK(additions[0] == Approx(angle2 / std::pow(std::sin(theta), 2)).epsilon(1e-12));
+  CHECK(additions[2] == Approx(std::pow(0.02 * qOverP, 2)).epsilon(1e-12));
+  CHECK(windowCovarianceAdditions(-qOverP, theta, 1.0e-3, 0.02) == additions);
+}
 
-  const auto opposite =
-      covarianceModelAdditions(-qOverP, 1.0e-5, 0.15, 2.0e-9, 1.0e-3, 4.0e-8, 0.02, 0.01);
-  CHECK(opposite == additions);
+namespace {
+
+/// Analytic B0pf-like combined-function field in the ion frame: hard-edged in
+/// z, By = B0 + G x, Bx = G y (the DD4hep MultipoleMagnet). Units T, mm.
+struct BoxQuadrupoleField {
+  double zEntrance;
+  double zExit;
+  double dipole;
+  double gradient;
+  std::array<double, 3> operator()(double x, double y, double z) const {
+    if (z < zEntrance || z > zExit) {
+      return {0.0, 0.0, 0.0};
+    }
+    return {gradient * y, dipole + gradient * x, 0.0};
+  }
+};
+
+/// Lorentz-force RK4 propagation of a charged particle from the origin, in the
+/// ion frame, returning the positions at the requested stations.
+std::vector<Point3> propagateTruth(const BoxQuadrupoleField& field, double qOverP, double tx0,
+                                   double ty0, const std::array<double, 4>& stations,
+                                   double variance) {
+  constexpr double kBend = 2.998e-4;
+  std::array<double, 6> state{0.0, 0.0, 0.0, tx0, ty0, 1.0};
+  const double norm = std::sqrt(tx0 * tx0 + ty0 * ty0 + 1.0);
+  for (int i = 3; i < 6; ++i) {
+    state[i] /= norm;
+  }
+  const auto derivative = [&](const std::array<double, 6>& s) {
+    const auto b = field(s[0], s[1], s[2]);
+    // d(dir)/ds = kappa (q/p) dir x B
+    return std::array<double, 6>{s[3],
+                                 s[4],
+                                 s[5],
+                                 kBend * qOverP * (s[4] * b[2] - s[5] * b[1]),
+                                 kBend * qOverP * (s[5] * b[0] - s[3] * b[2]),
+                                 kBend * qOverP * (s[3] * b[1] - s[4] * b[0])};
+  };
+  std::vector<Point3> out;
+  const double h   = 1.0;
+  std::size_t next = 0;
+  while (next < stations.size()) {
+    std::array<double, 6> k1 = derivative(state);
+    std::array<double, 6> tmp;
+    for (int i = 0; i < 6; ++i) {
+      tmp[i] = state[i] + 0.5 * h * k1[i];
+    }
+    std::array<double, 6> k2 = derivative(tmp);
+    for (int i = 0; i < 6; ++i) {
+      tmp[i] = state[i] + 0.5 * h * k2[i];
+    }
+    std::array<double, 6> k3 = derivative(tmp);
+    for (int i = 0; i < 6; ++i) {
+      tmp[i] = state[i] + h * k3[i];
+    }
+    std::array<double, 6> k4       = derivative(tmp);
+    std::array<double, 6> previous = state;
+    for (int i = 0; i < 6; ++i) {
+      state[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+    }
+    while (next < stations.size() && state[2] >= stations[next]) {
+      const double f = (stations[next] - previous[2]) / (state[2] - previous[2]);
+      out.push_back({previous[0] + f * (state[0] - previous[0]),
+                     previous[1] + f * (state[1] - previous[1]), stations[next], variance,
+                     variance});
+      ++next;
+    }
+  }
+  return out;
+}
+
+} // namespace
+
+TEST_CASE("B0 seed recovers charge, momentum and direction of an RK4 truth track",
+          "[B0TrackerStubSeeder]") {
+  constexpr double zEntrance     = 5800.0;
+  constexpr double crossingAngle = -0.025;
+  const BoxQuadrupoleField field{zEntrance, zEntrance + 1200.0, 1.184, -8.12e-3};
+  constexpr double kBend = 2.998e-4;
+
+  for (const double charge : {1.0, -1.0}) {
+    for (const double momentum : {41.0, 15.0}) {
+      const double qOverP = charge / momentum;
+      const double tx0    = -2.0e-3;
+      const double ty0    = 1.2e-2; // ~75 mm at B0: the Bx = G y term is well visible
+      const auto points   = propagateTruth(field, qOverP, tx0, ty0, kOfficialStationZ, 4.0e-4);
+      REQUIRE(points.size() == 4);
+
+      // Sample the field along the auxiliary path exactly like the seeder.
+      const StubFit path = fitStub(points);
+      REQUIRE(path.valid);
+      std::vector<double> meshZ{zEntrance};
+      for (const auto& p : points) {
+        meshZ.push_back(p.z);
+      }
+      for (int i = 1; i < 4; ++i) {
+        meshZ.push_back(zEntrance + 0.25 * i * (points.back().z - zEntrance));
+      }
+      std::sort(meshZ.begin(), meshZ.end());
+      std::vector<FieldSample> samplesX;
+      std::vector<FieldSample> samplesY;
+      for (std::size_t i = 0; i < meshZ.size(); ++i) {
+        const double z  = meshZ[i];
+        const double zq = i == 0 ? z + 1.0e-3 : z;
+        const auto b    = field(path.x(zq), path.y(zq), zq);
+        samplesX.push_back({z, b[0]});
+        samplesY.push_back({z, b[1]});
+      }
+      const auto momentsX = integrateFieldSamples(samplesX);
+      const auto momentsY = integrateFieldSamples(samplesY);
+      std::vector<double> integralsX;
+      std::vector<double> integralsY;
+      for (const auto& p : points) {
+        const auto it = std::find(meshZ.begin(), meshZ.end(), p.z);
+        REQUIRE(it != meshZ.end());
+        const auto idx = static_cast<std::size_t>(std::distance(meshZ.begin(), it));
+        integralsX.push_back(momentsX[idx].second);
+        integralsY.push_back(momentsY[idx].second);
+      }
+
+      const FieldIntegralFit bendFit = fitFieldIntegral(points, integralsY, zEntrance);
+      REQUIRE(bendFit.valid);
+      // Signed q/p from the actual Lorentz-force trajectory: a wrong sign
+      // convention or a wrong kappa would fail here.
+      CHECK(bendFit.qOverP == Approx(qOverP).epsilon(2e-3));
+      CHECK(bendFit.rmsX < 5.0e-3);
+
+      // The quadrupole bends the non-bend plane: a straight line no longer
+      // fits, until the kappa (q/p) Bx term is removed.
+      const StubFit rawLine   = fitStub(points);
+      const StubFit corrected = fitStub(removeNonBendCurvature(points, integralsX, bendFit.qOverP));
+      REQUIRE(corrected.valid);
+      CHECK(rawLine.rmsY > 0.05);
+      // Residual second-order terms (Bx sampled on the straight auxiliary path)
+      // leave a few microns, far below the 20 um hit resolution.
+      CHECK(corrected.rmsY < 5.0e-3);
+
+      // Seed direction on the origin perigee equals the true initial direction
+      // in the lab frame; the prompt track has zero impact parameters.
+      const auto seed        = seedParametersFromFit(bendFit, corrected, crossingAngle, true);
+      const double ca        = std::cos(crossingAngle);
+      const double sa        = std::sin(crossingAngle);
+      const double dx        = tx0 * ca + sa;
+      const double dz        = -tx0 * sa + ca;
+      const double truePhi   = std::atan2(ty0, dx);
+      const double trueTheta = std::acos(dz / std::sqrt(dx * dx + ty0 * ty0 + dz * dz));
+      CHECK(seed[0] == Approx(0.0).margin(1e-9));
+      CHECK(seed[1] == Approx(0.0).margin(1e-9));
+      CHECK(seed[2] == Approx(truePhi).margin(2e-3));
+      CHECK(seed[3] == Approx(trueTheta).margin(5e-6));
+      CHECK(seed[4] == Approx(qOverP).epsilon(2e-3));
+      (void)kBend;
+    }
+  }
 }
 
 TEST_CASE("B0 field-fit covariance propagates to correlated seed parameters",
@@ -323,8 +479,9 @@ TEST_CASE("B0 station clustering merges realistic front/back faces", "[B0Tracker
 
 TEST_CASE("B0 cached stations drop mid-gap hits instead of inventing a station",
           "[B0TrackerStubSeeder]") {
-  constexpr double gap     = 50.0;
-  const auto stations      = clusterStations({kRealisticStationZ.begin(), kRealisticStationZ.end()}, gap);
+  constexpr double gap = 50.0;
+  const auto stations =
+      clusterStations({kRealisticStationZ.begin(), kRealisticStationZ.end()}, gap);
   const double midGap      = 0.5 * (kRealisticStationZ[0] + kRealisticStationZ[1]);
   std::vector<double> hitZ = {kRealisticStationZ[0], midGap, kRealisticStationZ[1],
                               kRealisticStationZ[2], kRealisticStationZ[3]};

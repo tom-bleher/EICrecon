@@ -32,9 +32,6 @@ private:
       "ion-frame z of B0pf field entrance [mm]; <=0 uses B0PF geometry"};
   ParameterRef<unsigned int> m_fieldSamples{this, "fieldSamples", config().fieldSamples,
                                             "minimum ACTS field mesh points per candidate"};
-  ParameterRef<unsigned int> m_fieldFitIterations{this, "fieldFitIterations",
-                                                  config().fieldFitIterations,
-                                                  "field-integral fit iterations per candidate"};
   ParameterRef<float> m_stationZGap{this, "stationZGap", config().stationZGap,
                                     "ion-frame z gap [mm] that starts a new B0 station"};
   ParameterRef<unsigned int> m_minStations{this, "minStations", config().minStations,
@@ -82,26 +79,11 @@ private:
   ParameterRef<float> m_qOverPVariance{this, "qOverPVariance", config().qOverPVariance,
                                        "fallback seed q/p variance"};
   ParameterRef<float> m_timeVariance{this, "timeVariance", config().timeVariance,
-                                     "seed time variance"};
-  ParameterRef<float> m_seedTime{this, "seedTime", config().seedTime,
-                                 "seed time prior [ns] (no B0 timing digitization yet)"};
-  ParameterRef<float> m_phiModelVariance{this, "phiModelVariance", config().phiModelVariance,
-                                         "calibrated residual phi variance"};
-  ParameterRef<float> m_phiQOverPScale{this, "phiQOverPScale", config().phiQOverPScale,
-                                       "q/p-scaled phi model uncertainty [GeV rad]"};
-  ParameterRef<float> m_thetaModelVariance{this, "thetaModelVariance", config().thetaModelVariance,
-                                           "calibrated residual theta variance"};
-  ParameterRef<float> m_thetaQOverPScale{this, "thetaQOverPScale", config().thetaQOverPScale,
-                                         "q/p-scaled theta model uncertainty [GeV rad]"};
-  ParameterRef<float> m_qOverPModelVariance{this, "qOverPModelVariance",
-                                            config().qOverPModelVariance,
-                                            "calibrated residual q/p variance"};
-  ParameterRef<float> m_qOverPRelativeUncertainty{this, "qOverPRelativeUncertainty",
-                                                  config().qOverPRelativeUncertainty,
-                                                  "relative q/p trajectory-model uncertainty"};
-  ParameterRef<float> m_fieldRelativeUncertainty{this, "fieldRelativeUncertainty",
-                                                 config().fieldRelativeUncertainty,
-                                                 "external relative field-integral uncertainty"};
+                                     "seed time variance [ns^2]"};
+  ParameterRef<float> m_angularWindowScale{this, "angularWindowScale", config().angularWindowScale,
+                                           "CKF angular window [GeV rad], sigma=scale*|q/p|"};
+  ParameterRef<float> m_qOverPWindow{this, "qOverPWindow", config().qOverPWindow,
+                                     "CKF relative q/p window"};
 
 public:
   void Configure() {
