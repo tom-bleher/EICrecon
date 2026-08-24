@@ -121,12 +121,12 @@ void TrackParamTruthInit::process(const Input& input, const Output& output) cons
     track_parameter.setQOverP(charge / (pinit / dd4hep::GeV)); // Q/p [e/GeV]
     track_parameter.setTime(mcparticle.getTime());             // time [ns]
     edm4eic::Cov6f cov;
-    cov(0, 0) = m_cfg.locaError;
-    cov(1, 1) = m_cfg.locbError;
-    cov(2, 2) = m_cfg.phiError;
-    cov(3, 3) = m_cfg.thetaError;
-    cov(4, 4) = m_cfg.qOverPError;
-    cov(5, 5) = m_cfg.timeError;
+    cov(0, 0) = 1.0;  // loc0
+    cov(1, 1) = 1.0;  // loc1
+    cov(2, 2) = 0.05; // phi
+    cov(3, 3) = 0.01; // theta
+    cov(4, 4) = 0.1;  // qOverP
+    cov(5, 5) = 10e9; // time
     track_parameter.setCovariance(cov);
 
     // Insert into edm4eic::TrackSeeds
