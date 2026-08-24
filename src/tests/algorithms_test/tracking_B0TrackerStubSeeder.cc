@@ -25,10 +25,10 @@ using eicrecon::b0stub::integrateFieldSamples;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
 using eicrecon::b0stub::removeNonBendCurvature;
+using eicrecon::b0stub::scatteringCovarianceAdditions;
 using eicrecon::b0stub::seedCovarianceFromFit;
 using eicrecon::b0stub::seedParametersFromFit;
 using eicrecon::b0stub::StubFit;
-using eicrecon::b0stub::windowCovarianceAdditions;
 
 namespace {
 
@@ -205,16 +205,16 @@ TEST_CASE("B0 endpoint pruning keeps prompt pairs and rejects cross-pairs",
   CHECK_FALSE(endpointCompatibility(promptLast, promptFirst, 0.10, 5.0, true).valid);
 }
 
-TEST_CASE("B0 window covariance additions scale with q/p and project onto phi",
+TEST_CASE("B0 scattering covariance additions scale with q/p and project onto phi",
           "[B0TrackerStubSeeder]") {
   constexpr double qOverP = 0.04;
   constexpr double theta  = 0.03;
-  const auto additions    = windowCovarianceAdditions(qOverP, theta, 1.0e-3, 0.02);
+  const auto additions    = scatteringCovarianceAdditions(qOverP, theta, 1.0e-3, 0.02);
   const double angle2     = std::pow(1.0e-3 * qOverP, 2);
   CHECK(additions[1] == Approx(angle2).epsilon(1e-12));
   CHECK(additions[0] == Approx(angle2 / std::pow(std::sin(theta), 2)).epsilon(1e-12));
   CHECK(additions[2] == Approx(std::pow(0.02 * qOverP, 2)).epsilon(1e-12));
-  CHECK(windowCovarianceAdditions(-qOverP, theta, 1.0e-3, 0.02) == additions);
+  CHECK(scatteringCovarianceAdditions(-qOverP, theta, 1.0e-3, 0.02) == additions);
 }
 
 namespace {

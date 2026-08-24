@@ -113,23 +113,25 @@ struct B0TrackerStubSeederConfig {
   /// has a timing digitization.
   float timeVariance = 100.0;
 
-  // --- search window added to the propagated hit covariance ---
-  // The propagated measurement covariance describes the seed's own error:
-  // measured on a proton-gun sample (8-41 GeV, ion-frame 4-22 mrad,
-  // epic_ip6_extended with the realistic B0 modules) the seed direction is
-  // good to 13-24 urad and q/p to 2.4-4.3 %, of which multiple scattering
-  // contributes about 3e-4 GeV rad * |q/p| and 2-3 % of q/p. CKFTracking,
-  // however, only attaches the B0 hits reliably when the seed covariance is
-  // much wider than that: on the same sample the CKF efficiency rises
-  // monotonically with the window and saturates at the values below (about
-  // 30x the intrinsic angular error), with unchanged fitted-momentum quality.
-  // These are therefore CKF search windows, not error estimates; the pulls
-  // of the emitted seeds are far below one by construction.
-  /// Angular window coefficient [GeV rad]: sigma = scale * |q/p| is added to
-  /// theta and, divided by sin(theta), to phi.
-  float angularWindowScale = 1.6e-2;
-  /// Relative q/p window added in quadrature.
-  float qOverPWindow = 0.1;
+  // --- scattering terms added to the propagated hit covariance ---
+  // The propagated measurement covariance describes the hit resolution only.
+  // Multiple scattering in the beam pipe and the B0 stations, and the residual
+  // trajectory-model error, scale with 1/p and are added here. Measured on a
+  // proton-gun sample (3000 protons, 8-41 GeV, ion-frame 4-22 mrad,
+  // epic_ip6_extended with the realistic B0 modules and a material map
+  // generated for that geometry): the seed direction is good to 13-24 urad
+  // and q/p to 2.4-4.3 %, with pull widths of 0.85-1.0 after these terms.
+  // CKFTracking then reconstructs 698 of 765 seeded four-station events
+  // (723 with truth seeds); a wider window gains under 2 % of tracks and
+  // degrades the fitted momentum. NOTE: with a material map that does not
+  // match the geometry the CKF becomes strongly window-limited; regenerate
+  // the map (epic scripts/refresh_local_material_map.sh) rather than
+  // inflating these.
+  /// Scattering angle coefficient [GeV rad]: sigma = scale * |q/p| is added
+  /// to theta and, divided by sin(theta), to phi.
+  float scatteringScale = 3.0e-4;
+  /// Relative q/p uncertainty from scattering and the trajectory model.
+  float qOverPRelativeUncertainty = 0.025;
 };
 
 } // namespace eicrecon

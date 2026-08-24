@@ -117,10 +117,11 @@ namespace b0stub {
                                              const std::vector<double>& secondIntegralsX,
                                              double qOverP);
 
-  /// Diagonal (phi, theta, q/p) variance additions forming the CKF search
-  /// window, both scaling with |q/p|.
-  std::array<double, 3> windowCovarianceAdditions(double qOverP, double theta,
-                                                  double angularWindowScale, double qOverPWindow);
+  /// Diagonal (phi, theta, q/p) variance additions for multiple scattering
+  /// and the trajectory model, both scaling with |q/p|.
+  std::array<double, 3> scatteringCovarianceAdditions(double qOverP, double theta,
+                                                      double scatteringScale,
+                                                      double qOverPRelativeUncertainty);
 
   /// Seed parameters (loc0, loc1, phi, theta, q/p) on the origin perigee from
   /// the bend and non-bend fits, in the lab frame.

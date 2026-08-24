@@ -80,10 +80,12 @@ private:
                                        "fallback seed q/p variance"};
   ParameterRef<float> m_timeVariance{this, "timeVariance", config().timeVariance,
                                      "seed time variance [ns^2]"};
-  ParameterRef<float> m_angularWindowScale{this, "angularWindowScale", config().angularWindowScale,
-                                           "CKF angular window [GeV rad], sigma=scale*|q/p|"};
-  ParameterRef<float> m_qOverPWindow{this, "qOverPWindow", config().qOverPWindow,
-                                     "CKF relative q/p window"};
+  ParameterRef<float> m_scatteringScale{
+      this, "scatteringScale", config().scatteringScale,
+      "scattering angle coefficient [GeV rad], sigma=scale*|q/p|"};
+  ParameterRef<float> m_qOverPRelativeUncertainty{this, "qOverPRelativeUncertainty",
+                                                  config().qOverPRelativeUncertainty,
+                                                  "relative q/p scattering/model uncertainty"};
 
 public:
   void Configure() {

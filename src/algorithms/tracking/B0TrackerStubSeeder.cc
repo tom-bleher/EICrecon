@@ -328,11 +328,12 @@ namespace b0stub {
     return corrected;
   }
 
-  std::array<double, 3> windowCovarianceAdditions(double qOverP, double theta,
-                                                  double angularWindowScale, double qOverPWindow) {
-    const double angle   = angularWindowScale * std::abs(qOverP);
+  std::array<double, 3> scatteringCovarianceAdditions(double qOverP, double theta,
+                                                      double scatteringScale,
+                                                      double qOverPRelativeUncertainty) {
+    const double angle   = scatteringScale * std::abs(qOverP);
     const double sinTh   = std::max(std::abs(std::sin(theta)), 1.0e-6);
-    const double relQopS = qOverPWindow * qOverP;
+    const double relQopS = qOverPRelativeUncertainty * qOverP;
     return {angle * angle / (sinTh * sinTh), angle * angle, relQopS * relQopS};
   }
 
@@ -1251,11 +1252,11 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
           covariance(i, i) = fallbackVariances[i];
         }
       }
-      const auto window = b0stub::windowCovarianceAdditions(
-          emittedQOverP, state(3), m_cfg.angularWindowScale, m_cfg.qOverPWindow);
-      covariance(2, 2) += window[0];
-      covariance(3, 3) += window[1];
-      covariance(4, 4) += window[2];
+      const auto scattering = b0stub::scatteringCovarianceAdditions(
+          emittedQOverP, state(3), m_cfg.scatteringScale, m_cfg.qOverPRelativeUncertainty);
+      covariance(2, 2) += scattering[0];
+      covariance(3, 3) += scattering[1];
+      covariance(4, 4) += scattering[2];
 
       auto trackparam = track_params_output->create();
       trackparam.setType(-1); // seed
