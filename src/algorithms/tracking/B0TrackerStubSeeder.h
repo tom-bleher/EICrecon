@@ -35,9 +35,10 @@ namespace b0stub {
     double varianceY{};
   };
 
-  /// Auxiliary fit in the ion frame: a parabola in the bend plane and a line
-  /// in the non-bend plane. It supplies compatibility residuals and the
-  /// initial field-sampling path; momentum comes from FieldIntegralFit.
+  /// Least-squares fit in the ion frame: a parabola in the bend plane and a
+  /// line in the non-bend plane. In the uniform dipole field of the B0pf the
+  /// parabola is the small-angle trajectory, so its curvature is the momentum
+  /// measurement (see bendFitFromParabola).
   struct StubFit {
     double c0{}; ///< x(z) = c0 + c1 z + c2 z^2
     double c1{};
@@ -68,23 +69,10 @@ namespace b0stub {
   /// z is centred and scaled internally so the equations stay well conditioned.
   StubFit fitStub(const std::vector<Point3>& pts);
 
-  struct FieldSample {
-    double z{};      ///< ion-frame position [mm]
-    double fieldY{}; ///< ion-frame field component integrated [T]
-  };
-
-  struct FieldIntegral {
-    double first{};  ///< integral B_y ds [T mm]
-    double second{}; ///< integral (z-s) B_y ds [T mm^2]
-  };
-
-  /// Integrate a sorted field mesh with a piecewise-linear B_y model. The
-  /// returned moments have the same length and are referenced to samples[0].
-  std::vector<FieldIntegral> integrateFieldSamples(const std::vector<FieldSample>& samples);
-
-  /// Weighted linear bend-plane fit
-  /// x(z)=x_ref+tx_ref*(z-z_ref)-K*(q/p)*I(z).
-  struct FieldIntegralFit {
+  /// Bend-plane state at a reference z (the B0pf entrance), derived from the
+  /// parabola in a uniform field: x(z) = x_ref + tx_ref (z-z_ref) - K (q/p) B_y
+  /// (z-z_ref)^2 / 2.
+  struct BendFit {
     double zReference{};
     double xReference{};
     double txReference{};
@@ -95,8 +83,16 @@ namespace b0stub {
     bool covarianceValid{false};
     bool valid{false};
   };
-  FieldIntegralFit fitFieldIntegral(const std::vector<Point3>& pts,
-                                    const std::vector<double>& secondIntegrals, double zReference);
+  /// Signed q/p = -2 c2 / (K B_y) and the entrance state from the parabola
+  /// fit, with the coefficient covariance transformed linearly. `fieldY` is the
+  /// ion-frame dipole component [T] along the hits; it must be non-zero. The
+  /// parabola is used from `zFirst` (first hit) on; the gap from `zReference`
+  /// to `zFirst` is stepped back analytically with `fieldYGap`, since the
+  /// unrotated magnet puts a lower field there than along the stations.
+  BendFit bendFitFromParabola(const StubFit& fit, double fieldY, double zReference, double zFirst,
+                              double fieldYGap);
+  /// Uniform-field convenience: the parabola itself is evaluated at zReference.
+  BendFit bendFitFromParabola(const StubFit& fit, double fieldY, double zReference);
 
   struct EndpointCompatibility {
     double slopeY{};
@@ -109,13 +105,11 @@ namespace b0stub {
                                               double maxAbsSlope, double maxBeamResidual,
                                               bool constrainToBeamline);
 
-  /// Remove the quadrupole bending y'' = kappa (q/p) Bx from the non-bend
-  /// coordinates so that a straight line describes the field-free upstream
-  /// trajectory. `secondIntegralsX` are the (z-s) Bx moments at the points,
-  /// referenced to the field entrance.
-  std::vector<Point3> removeNonBendCurvature(const std::vector<Point3>& pts,
-                                             const std::vector<double>& secondIntegralsX,
-                                             double qOverP);
+  /// Remove the quadrupole bending y'' = kappa (q/p) Bx (uniform `fieldX` [T]
+  /// from `zReference` on) from the non-bend coordinates so that a straight
+  /// line describes the field-free upstream trajectory.
+  std::vector<Point3> removeNonBendCurvature(const std::vector<Point3>& pts, double fieldX,
+                                             double qOverP, double zReference);
 
   /// Diagonal (phi, theta, q/p) variance additions for multiple scattering
   /// and the trajectory model, both scaling with |q/p|.
@@ -125,15 +119,13 @@ namespace b0stub {
 
   /// Seed parameters (loc0, loc1, phi, theta, q/p) on the origin perigee from
   /// the bend and non-bend fits, in the lab frame.
-  std::array<double, 5> seedParametersFromFit(const FieldIntegralFit& bendFit,
-                                              const StubFit& nonBendFit, double crossingAngle,
-                                              bool constrainToBeamline);
+  std::array<double, 5> seedParametersFromFit(const BendFit& bendFit, const StubFit& nonBendFit,
+                                              double crossingAngle, bool constrainToBeamline);
 
   /// Propagate the fitted coefficient covariance to
   /// (loc0,loc1,phi,theta,q/p), returned as a row-major 5x5 matrix.
-  std::array<double, 25> seedCovarianceFromFit(const FieldIntegralFit& bendFit,
-                                               const StubFit& nonBendFit, double crossingAngle,
-                                               bool constrainToBeamline);
+  std::array<double, 25> seedCovarianceFromFit(const BendFit& bendFit, const StubFit& nonBendFit,
+                                               double crossingAngle, bool constrainToBeamline);
 
   /// Perigee parameters of the straight ray leaving `ref` along `dir`, expressed
   /// on a perigee surface centred at `perigee`. All positions in mm.
@@ -189,11 +181,11 @@ using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
 
 /// Dedicated seeder for the B0 tracker (dipole spectrometer at z ~ 6 m).
 ///
-/// Fits one hit per station in the ion-rotated frame with a sampled
-/// field-integral basis: signed q/p and direction from the bend plane, the
-/// quadrupole Bx bending removed from the non-bend plane, then back-extrapolates
-/// analytically to the origin and emits seed parameters on the origin perigee
-/// surface that CKFTracking expects.
+/// Fits one hit per station in the ion-rotated frame: a parabola in the bend
+/// plane gives signed q/p and direction from the local dipole field, the
+/// quadrupole Bx bending is removed from the non-bend plane, then the state is
+/// back-extrapolated analytically to the origin and emitted on the origin
+/// perigee surface that CKFTracking expects.
 class B0TrackerStubSeeder : public B0TrackerStubSeederAlgorithm,
                             public WithPodConfig<B0TrackerStubSeederConfig> {
 public:

@@ -30,8 +30,6 @@ private:
   ParameterRef<float> m_zFieldEntrance{
       this, "zFieldEntrance", config().zFieldEntrance,
       "ion-frame z of B0pf field entrance [mm]; <=0 uses B0PF geometry"};
-  ParameterRef<unsigned int> m_fieldSamples{this, "fieldSamples", config().fieldSamples,
-                                            "minimum ACTS field mesh points per candidate"};
   ParameterRef<float> m_stationZGap{this, "stationZGap", config().stationZGap,
                                     "ion-frame z gap [mm] that starts a new B0 station"};
   ParameterRef<unsigned int> m_minStations{this, "minStations", config().minStations,

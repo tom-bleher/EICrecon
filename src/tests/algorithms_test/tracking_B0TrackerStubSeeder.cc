@@ -14,14 +14,12 @@
 
 using Catch::Approx;
 using eicrecon::b0stub::assignStation;
+using eicrecon::b0stub::BendFit;
+using eicrecon::b0stub::bendFitFromParabola;
 using eicrecon::b0stub::clusterStations;
 using eicrecon::b0stub::endpointCompatibility;
-using eicrecon::b0stub::FieldIntegralFit;
-using eicrecon::b0stub::FieldSample;
-using eicrecon::b0stub::fitFieldIntegral;
 using eicrecon::b0stub::fitStub;
 using eicrecon::b0stub::groupHitsByStation;
-using eicrecon::b0stub::integrateFieldSamples;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
 using eicrecon::b0stub::removeNonBendCurvature;
@@ -131,56 +129,82 @@ TEST_CASE("B0 three-station fit retains measurement covariance", "[B0TrackerStub
   CHECK(fit.rmsX == Approx(0.0).margin(1e-6));
 }
 
-TEST_CASE("B0 field quadrature is exact for a linear field", "[B0TrackerStubSeeder]") {
-  constexpr double z0       = 5800.0;
-  constexpr double field0   = 1.1;
-  constexpr double gradient = 2.0e-4;
-  std::vector<FieldSample> samples;
-  for (double z : {z0, 5902.0, 6172.0, 6712.0}) {
-    samples.push_back({z, field0 + gradient * (z - z0)});
-  }
-  const auto moments = integrateFieldSamples(samples);
-  REQUIRE(moments.size() == samples.size());
-  for (std::size_t i = 0; i < samples.size(); ++i) {
-    const double dz = samples[i].z - z0;
-    CHECK(moments[i].first == Approx(field0 * dz + 0.5 * gradient * dz * dz).epsilon(1e-12));
-    CHECK(moments[i].second ==
-          Approx(0.5 * field0 * dz * dz + gradient * dz * dz * dz / 6.0).epsilon(1e-12));
-  }
-}
-
-TEST_CASE("B0 field-integral fit recovers signed q over p", "[B0TrackerStubSeeder]") {
+TEST_CASE("B0 bend fit recovers signed q over p from the parabola", "[B0TrackerStubSeeder]") {
   constexpr double zEntrance  = 5800.0;
   constexpr double fieldY     = 1.184;
-  constexpr double qOverP     = 1.0 / 41.0;
   constexpr double xEntrance  = -2.5;
   constexpr double txEntrance = -1.0e-3;
   constexpr double kBend      = 2.998e-4;
-  for (const auto& stations : kGeometries) {
-    std::vector<Point3> points;
-    std::vector<double> integrals;
-    for (double z : stations) {
-      const double dz       = z - zEntrance;
-      const double integral = 0.5 * fieldY * dz * dz;
-      points.push_back({xEntrance + txEntrance * dz - kBend * qOverP * integral, -1.5 + 2.0e-3 * z,
-                        z, 4.0e-4, 9.0e-4});
-      integrals.push_back(integral);
-    }
-    const FieldIntegralFit fit = fitFieldIntegral(points, integrals, zEntrance);
-    REQUIRE(fit.valid);
-    REQUIRE(fit.covarianceValid);
-    CHECK(fit.xReference == Approx(xEntrance).margin(1e-10));
-    CHECK(fit.txReference == Approx(txEntrance).margin(1e-12));
-    CHECK(fit.qOverP == Approx(qOverP).epsilon(1e-10));
-    CHECK(fit.rmsX == Approx(0.0).margin(1e-10));
+  for (const double qOverP : {1.0 / 41.0, -1.0 / 8.0}) {
+    for (const auto& stations : kGeometries) {
+      std::vector<Point3> points;
+      for (double z : stations) {
+        const double dz = z - zEntrance;
+        points.push_back({xEntrance + txEntrance * dz - 0.5 * kBend * qOverP * fieldY * dz * dz,
+                          -1.5 + 2.0e-3 * z, z, 4.0e-4, 9.0e-4});
+      }
+      const StubFit parabola = fitStub(points);
+      REQUIRE(parabola.valid);
+      const BendFit fit = bendFitFromParabola(parabola, fieldY, zEntrance);
+      REQUIRE(fit.valid);
+      REQUIRE(fit.covarianceValid);
+      CHECK(fit.xReference == Approx(xEntrance).margin(1e-8));
+      CHECK(fit.txReference == Approx(txEntrance).margin(1e-11));
+      CHECK(fit.qOverP == Approx(qOverP).epsilon(1e-8));
+      CHECK(fit.rmsX == Approx(0.0).margin(1e-8));
 
-    auto scaledPoints = points;
-    for (auto& point : scaledPoints) {
-      point.varianceX *= 4.0;
+      auto scaledPoints = points;
+      for (auto& point : scaledPoints) {
+        point.varianceX *= 4.0;
+      }
+      const auto scaled = bendFitFromParabola(fitStub(scaledPoints), fieldY, zEntrance);
+      REQUIRE(scaled.covarianceValid);
+      CHECK(scaled.covariance[8] == Approx(4.0 * fit.covariance[8]).epsilon(1e-10));
+      // Flipping the field flips the inferred charge.
+      CHECK(bendFitFromParabola(parabola, -fieldY, zEntrance).qOverP ==
+            Approx(-qOverP).epsilon(1e-8));
     }
-    const auto scaled = fitFieldIntegral(scaledPoints, integrals, zEntrance);
-    REQUIRE(scaled.covarianceValid);
-    CHECK(scaled.covariance[8] == Approx(4.0 * fit.covariance[8]).epsilon(1e-10));
+  }
+  CHECK_FALSE(
+      bendFitFromParabola(fitStub(sampleTrack(0.0, 0.0, 0.0, 0.0, 0.0)), 0.0, zEntrance).valid);
+}
+
+TEST_CASE("B0 bend fit steps back through a lower-field gap exactly", "[B0TrackerStubSeeder]") {
+  constexpr double zEntrance  = 5800.0;
+  constexpr double fieldY     = 1.30;
+  constexpr double fieldYGap  = 1.19;
+  constexpr double qOverP     = 1.0 / 20.0;
+  constexpr double xEntrance  = -2.5;
+  constexpr double txEntrance = -1.0e-3;
+  constexpr double kBend      = 2.998e-4;
+  const double zFirst         = kOfficialStationZ.front();
+  const double gap            = zFirst - zEntrance;
+  // Piecewise-uniform truth: fieldYGap up to the first station, fieldY beyond.
+  const double tx1 = txEntrance - kBend * qOverP * fieldYGap * gap;
+  const double x1  = xEntrance + txEntrance * gap - 0.5 * kBend * qOverP * fieldYGap * gap * gap;
+  std::vector<Point3> points;
+  for (double z : kOfficialStationZ) {
+    const double dz = z - zFirst;
+    points.push_back(
+        {x1 + tx1 * dz - 0.5 * kBend * qOverP * fieldY * dz * dz, 0.0, z, 4.0e-4, 4.0e-4});
+  }
+  const StubFit parabola = fitStub(points);
+  REQUIRE(parabola.valid);
+  const BendFit stepped = bendFitFromParabola(parabola, fieldY, zEntrance, zFirst, fieldYGap);
+  REQUIRE(stepped.valid);
+  REQUIRE(stepped.covarianceValid);
+  CHECK(stepped.qOverP == Approx(qOverP).epsilon(1e-8));
+  CHECK(stepped.xReference == Approx(xEntrance).margin(1e-8));
+  CHECK(stepped.txReference == Approx(txEntrance).margin(1e-11));
+  // Ignoring the gap field biases the entrance state.
+  const BendFit uniform = bendFitFromParabola(parabola, fieldY, zEntrance);
+  CHECK(std::abs(uniform.txReference - txEntrance) > 1e-7);
+  // With an equal gap field the two forms agree, covariance included.
+  const BendFit same = bendFitFromParabola(parabola, fieldY, zEntrance, zFirst, fieldY);
+  CHECK(same.xReference == Approx(uniform.xReference).margin(1e-9));
+  CHECK(same.txReference == Approx(uniform.txReference).margin(1e-12));
+  for (int i = 0; i < 9; ++i) {
+    CHECK(same.covariance[i] == Approx(uniform.covariance[i]).epsilon(1e-9).margin(1e-30));
   }
 }
 
@@ -305,54 +329,30 @@ TEST_CASE("B0 seed recovers charge, momentum and direction of an RK4 truth track
       const auto points   = propagateTruth(field, qOverP, tx0, ty0, kOfficialStationZ, 4.0e-4);
       REQUIRE(points.size() == 4);
 
-      // Sample the field along the auxiliary path exactly like the seeder.
-      const StubFit path = fitStub(points);
-      REQUIRE(path.valid);
-      std::vector<double> meshZ{zEntrance};
-      for (const auto& p : points) {
-        meshZ.push_back(p.z);
-      }
-      for (int i = 1; i < 4; ++i) {
-        meshZ.push_back(zEntrance + 0.25 * i * (points.back().z - zEntrance));
-      }
-      std::sort(meshZ.begin(), meshZ.end());
-      std::vector<FieldSample> samplesX;
-      std::vector<FieldSample> samplesY;
-      for (std::size_t i = 0; i < meshZ.size(); ++i) {
-        const double z  = meshZ[i];
-        const double zq = i == 0 ? z + 1.0e-3 : z;
-        const auto b    = field(path.x(zq), path.y(zq), zq);
-        samplesX.push_back({z, b[0]});
-        samplesY.push_back({z, b[1]});
-      }
-      const auto momentsX = integrateFieldSamples(samplesX);
-      const auto momentsY = integrateFieldSamples(samplesY);
-      std::vector<double> integralsX;
-      std::vector<double> integralsY;
-      for (const auto& p : points) {
-        const auto it = std::find(meshZ.begin(), meshZ.end(), p.z);
-        REQUIRE(it != meshZ.end());
-        const auto idx = static_cast<std::size_t>(std::distance(meshZ.begin(), it));
-        integralsX.push_back(momentsX[idx].second);
-        integralsY.push_back(momentsY[idx].second);
-      }
-
-      const FieldIntegralFit bendFit = fitFieldIntegral(points, integralsY, zEntrance);
+      // Sample the field once on the fitted trajectory at mid z, like the seeder.
+      const StubFit parabola = fitStub(points);
+      REQUIRE(parabola.valid);
+      const double zMid  = 0.5 * (points.front().z + points.back().z);
+      const auto bMid    = field(parabola.x(zMid), parabola.y(zMid), zMid);
+      const auto bendFit = bendFitFromParabola(parabola, bMid[1], zEntrance);
       REQUIRE(bendFit.valid);
       // Signed q/p from the actual Lorentz-force trajectory: a wrong sign
-      // convention or a wrong kappa would fail here.
-      CHECK(bendFit.qOverP == Approx(qOverP).epsilon(2e-3));
-      CHECK(bendFit.rmsX < 5.0e-3);
+      // convention or a wrong kappa would fail here. The tolerance is the
+      // uniform-field approximation of the quadrupole-shaped field.
+      CHECK(bendFit.qOverP == Approx(qOverP).epsilon(3e-3));
+      // Parabola residual of the ~5 % field variation across the stations:
+      // a few microns against the 20 um hit resolution.
+      CHECK(bendFit.rmsX < 1.0e-2);
 
       // The quadrupole bends the non-bend plane: a straight line no longer
       // fits, until the kappa (q/p) Bx term is removed.
-      const StubFit rawLine   = fitStub(points);
-      const StubFit corrected = fitStub(removeNonBendCurvature(points, integralsX, bendFit.qOverP));
+      const StubFit rawLine = fitStub(points);
+      const StubFit corrected =
+          fitStub(removeNonBendCurvature(points, bMid[0], bendFit.qOverP, zEntrance));
       REQUIRE(corrected.valid);
       CHECK(rawLine.rmsY > 0.05);
-      // Residual second-order terms (Bx sampled on the straight auxiliary path)
-      // leave a few microns, far below the 20 um hit resolution.
-      CHECK(corrected.rmsY < 5.0e-3);
+      // Residual from Bx varying along the track; well below the 0.5 mm cut.
+      CHECK(corrected.rmsY < 2.0e-2);
 
       // Seed direction on the origin perigee equals the true initial direction
       // in the lab frame; the prompt track has zero impact parameters.
@@ -367,29 +367,26 @@ TEST_CASE("B0 seed recovers charge, momentum and direction of an RK4 truth track
       CHECK(seed[1] == Approx(0.0).margin(1e-9));
       CHECK(seed[2] == Approx(truePhi).margin(2e-3));
       CHECK(seed[3] == Approx(trueTheta).margin(5e-6));
-      CHECK(seed[4] == Approx(qOverP).epsilon(2e-3));
+      CHECK(seed[4] == Approx(qOverP).epsilon(3e-3));
       (void)kBend;
     }
   }
 }
 
-TEST_CASE("B0 field-fit covariance propagates to correlated seed parameters",
+TEST_CASE("B0 bend-fit covariance propagates to correlated seed parameters",
           "[B0TrackerStubSeeder]") {
   constexpr double zEntrance = 5800.0;
   constexpr double fieldY    = 1.184;
   constexpr double qOverP    = 1.0 / 41.0;
   constexpr double kBend     = 2.998e-4;
   std::vector<Point3> points;
-  std::vector<double> integrals;
   for (double z : kOfficialStationZ) {
-    const double dz       = z - zEntrance;
-    const double integral = 0.5 * fieldY * dz * dz;
-    points.push_back(
-        {-2.5 - 1.0e-3 * dz - kBend * qOverP * integral, -1.5 + 2.0e-3 * z, z, 4.0e-4, 4.0e-4});
-    integrals.push_back(integral);
+    const double dz = z - zEntrance;
+    points.push_back({-2.5 - 1.0e-3 * dz - 0.5 * kBend * qOverP * fieldY * dz * dz,
+                      -1.5 + 2.0e-3 * z, z, 4.0e-4, 4.0e-4});
   }
-  const StubFit nonBendFit       = fitStub(points);
-  const FieldIntegralFit bendFit = fitFieldIntegral(points, integrals, zEntrance);
+  const StubFit nonBendFit = fitStub(points);
+  const BendFit bendFit    = bendFitFromParabola(nonBendFit, fieldY, zEntrance);
   REQUIRE(nonBendFit.covarianceValid);
   REQUIRE(bendFit.covarianceValid);
   const auto flat = seedCovarianceFromFit(bendFit, nonBendFit, -0.025, true);

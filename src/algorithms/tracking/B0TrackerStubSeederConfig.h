@@ -10,27 +10,22 @@ namespace eicrecon {
 /// The B0 tracker sits inside the B0pf combined-function magnet (dipole along
 /// y plus a quadrupole gradient), where the solenoid-model helix estimation of
 /// the orthogonal seeder returns invalid parameters (random charge sign). This
-/// seeder instead fits the hits of the four B0 stations directly with a
-/// sampled field-integral model: the bend plane gives direction and signed
-/// q/p, the quadrupole term Bx = G*y is removed from the non-bend plane, and
+/// seeder instead fits the hits of the four B0 stations directly: a parabola
+/// in the bend plane gives direction and signed q/p from the local dipole
+/// field, the quadrupole term Bx = G*y is removed from the non-bend plane, and
 /// the result is back-extrapolated analytically to the origin perigee that
 /// CKFTracking expects.
 struct B0TrackerStubSeederConfig {
 
   // --- geometry / field ---
-  /// The dipole field is sampled from the ACTS/DD4hep field provider along
-  /// each fitted candidate. This is only a guard against a zero-field query,
-  /// not an analytic B0 field substitute.
+  /// Minimum |By| [T] at the candidate's middle hit, sampled from the
+  /// ACTS/DD4hep field provider. A guard against a zero-field query only.
   float minAbsFieldY = 0.05;
   /// Ion-frame z of the B0pf field entrance [mm]. Used for the
-  /// origin-constrained upstream chord and as the field-integral reference.
+  /// origin-constrained upstream chord and as the bend-plane reference.
   /// <= 0 (the default) derives it from B0PF_CenterPosition, B0PF_Length and
   /// B0PF_XPosition. A positive value overrides that for diagnostics.
   float zFieldEntrance = 0.0;
-  /// Minimum number of ACTS field mesh points from the B0pf entrance through
-  /// the outermost selected station; all selected hit positions and a few
-  /// points just inside the entrance (to resolve the field edge) are added too.
-  unsigned int fieldSamples = 9;
 
   // --- seeding logic ---
   /// Hits whose ion-frame z differs by more than this (mm) are different
