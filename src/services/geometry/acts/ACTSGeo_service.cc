@@ -68,6 +68,16 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       m_acts_provider->setObjWriteIt(objWriteIt);
       m_acts_provider->setPlyWriteIt(plyWriteIt);
 
+      double layerEnvelopeR = m_acts_provider->getLayerEnvelopeR();
+      double layerEnvelopeZ = m_acts_provider->getLayerEnvelopeZ();
+      m_app->SetDefaultParameter("acts:LayerEnvelopeR", layerEnvelopeR,
+                                 "Radial envelope added around each tracking layer [mm]");
+      m_app->SetDefaultParameter("acts:LayerEnvelopeZ", layerEnvelopeZ,
+                                 "Longitudinal envelope added around each tracking layer [mm]; "
+                                 "must cover r*tan(tilt) for layers tilted off the beam axis");
+      m_acts_provider->setLayerEnvelopeR(layerEnvelopeR);
+      m_acts_provider->setLayerEnvelopeZ(layerEnvelopeZ);
+
       std::string outputTag = m_acts_provider->getOutputTag();
       std::string outputDir = m_acts_provider->getOutputDir();
       m_app->SetDefaultParameter("acts:OutputTag", outputTag, "Obj and ply output file tag");

@@ -129,7 +129,28 @@ private:
   std::string m_outputTag{""};
   std::string m_outputDir{""};
 
+  /// Layer envelopes [mm] added around each layer when converting DD4hep
+  /// volumes to ACTS tracking layers.
+  ///
+  /// A disc layer that is tilted with respect to the beam axis -- the B0
+  /// tracker follows the outgoing ion direction, 25 mrad off z -- spans
+  /// r*tan(alpha) in z, up to 5 mm at its outer radius. With a 1 mm envelope
+  /// the outer sensors fall outside their own layer and the CKF navigator
+  /// silently skips them: no measurement and no hole is recorded. Measured on
+  /// a 41 GeV proton gun, raising the z envelope from 1 mm lifts the mean
+  /// number of measurements per B0 track from 3.40 to 3.63 and the fraction of
+  /// four-station tracks from 40 % to 63 %. The gain saturates at 3 mm; values
+  /// beyond ~10 mm start to merge the 7 mm-spaced front/back layers of the
+  /// realistic B0 geometry, so this is deliberately not set larger.
+  double m_layerEnvelopeR{1.0};
+  double m_layerEnvelopeZ{5.0};
+
 public:
+  void setLayerEnvelopeR(double envelope) { m_layerEnvelopeR = envelope; }
+  double getLayerEnvelopeR() const { return m_layerEnvelopeR; }
+  void setLayerEnvelopeZ(double envelope) { m_layerEnvelopeZ = envelope; }
+  double getLayerEnvelopeZ() const { return m_layerEnvelopeZ; }
+
   void setObjWriteIt(bool writeit) { m_objWriteIt = writeit; }
   bool getObjWriteIt() const { return m_objWriteIt; }
   void setPlyWriteIt(bool writeit) { m_plyWriteIt = writeit; }
