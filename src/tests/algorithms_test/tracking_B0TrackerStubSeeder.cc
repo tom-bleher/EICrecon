@@ -538,3 +538,33 @@ TEST_CASE("B0 charge hypotheses cover the unresolved-curvature limit", "[B0Track
             std::vector<int>{-1, 1});
   }
 }
+
+TEST_CASE("B0 sensor axes rotate hit variances onto the ion frame", "[B0TrackerStubSeeder]") {
+  using eicrecon::b0stub::rotateVariances;
+  using eicrecon::b0stub::sensorAxesInIonFrame;
+  const double crossing = -0.025;
+  const double ca       = std::cos(crossing);
+  const double sa       = std::sin(crossing);
+
+  // A sensor whose local axes are the ion-frame axes (tilted by the crossing
+  // angle in the lab) leaves the variances untouched.
+  const auto aligned = rotateVariances(
+      sensorAxesInIonFrame({.x = ca, .y = 0.0, .z = -sa}, {.x = 0.0, .y = 1.0, .z = 0.0}, crossing),
+      1.0, 4.0);
+  CHECK(std::abs(aligned.first - 1.0) < 1e-12);
+  CHECK(std::abs(aligned.second - 4.0) < 1e-12);
+
+  // Rotated by 90 degrees about the normal: the variances swap.
+  const auto swapped = rotateVariances(
+      sensorAxesInIonFrame({.x = 0.0, .y = 1.0, .z = 0.0}, {.x = -ca, .y = 0.0, .z = sa}, crossing),
+      1.0, 4.0);
+  CHECK(std::abs(swapped.first - 4.0) < 1e-12);
+  CHECK(std::abs(swapped.second - 1.0) < 1e-12);
+
+  // Rotated by 45 degrees: both ion-frame variances are the mean.
+  const double r      = 1.0 / std::sqrt(2.0);
+  const auto diagonal = rotateVariances(
+      sensorAxesInIonFrame({.x = r, .y = r, .z = 0.0}, {.x = -r, .y = r, .z = 0.0}, 0.0), 1.0, 4.0);
+  CHECK(std::abs(diagonal.first - 2.5) < 1e-12);
+  CHECK(std::abs(diagonal.second - 2.5) < 1e-12);
+}

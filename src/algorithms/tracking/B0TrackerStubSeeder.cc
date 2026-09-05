@@ -44,6 +44,7 @@
 #include <DD4hep/DD4hepUnits.h>
 #include <DD4hep/DetElement.h>
 #include <DD4hep/Detector.h>
+#include <DD4hep/Objects.h>
 #include <DD4hep/VolumeManager.h>
 #include <DDRec/CellIDPositionConverter.h>
 #include <Eigen/Dense>
@@ -586,6 +587,24 @@ namespace b0stub {
     return result;
   }
 
+  SensorAxes sensorAxesInIonFrame(const Point3& localX, const Point3& localY,
+                                  double crossingAngle) {
+    const double ca = std::cos(crossingAngle);
+    const double sa = std::sin(crossingAngle);
+    // Same rotation as the hit positions: ion x = x ca - z sa, ion y = y.
+    return {.ux = localX.x * ca - localX.z * sa,
+            .uy = localX.y,
+            .vx = localY.x * ca - localY.z * sa,
+            .vy = localY.y};
+  }
+
+  std::pair<double, double> rotateVariances(const SensorAxes& axes, double varianceU,
+                                            double varianceV) {
+    // Diagonal of R diag(varU, varV) R^T for the in-plane 2x2 projection R.
+    return {axes.ux * axes.ux * varianceU + axes.vx * axes.vx * varianceV,
+            axes.uy * axes.uy * varianceU + axes.vy * axes.vy * varianceV};
+  }
+
   std::vector<int> chargeHypotheses(double qOverP, double qOverPVariance,
                                     double minCurvatureSignificance, int inferredCharge,
                                     bool testBothCharges, int configuredCharge) {
@@ -598,8 +617,8 @@ namespace b0stub {
     // A charge sign is only resolved by a curvature that is significantly
     // non-zero. Exactly zero curvature, and a variance that is non-positive or
     // non-finite, are both maximally ambiguous.
-    const bool measurable = std::isfinite(qOverP) && qOverP != 0.0 &&
-                            std::isfinite(qOverPVariance) && qOverPVariance > 0.0;
+    const bool measurable     = std::isfinite(qOverP) && qOverP != 0.0 &&
+                                std::isfinite(qOverPVariance) && qOverPVariance > 0.0;
     const double significance = measurable ? std::abs(qOverP) / std::sqrt(qOverPVariance) : 0.0;
     if (significance < minCurvatureSignificance) {
       return {-1, 1};
@@ -618,7 +637,18 @@ void B0TrackerStubSeeder::init() {
   if (detector == nullptr) {
     throw std::runtime_error("B0TrackerStubSeeder: DD4hep detector is unavailable");
   }
-  m_crossing_angle = detector->constant<double>("CrossingAngle") / dd4hep::rad;
+  // A geometry without the far-forward definitions has no B0 to seed. Disable
+  // the seeder and emit empty collections rather than failing every event.
+  m_enabled = true;
+  try {
+    m_crossing_angle = detector->constant<double>("CrossingAngle") / dd4hep::rad;
+  } catch (const std::exception& error) {
+    warning("B0TrackerStubSeeder: DD4hep constant CrossingAngle is unavailable ({}); "
+            "the seeder is disabled and will produce no seeds",
+            error.what());
+    m_enabled = false;
+    return;
+  }
   if (!std::isfinite(m_crossing_angle)) {
     throw std::runtime_error("B0TrackerStubSeeder: DD4hep CrossingAngle is not finite");
   }
@@ -641,11 +671,12 @@ void B0TrackerStubSeeder::init() {
       m_z_face_lab       = zLab;
       m_z_field_entrance = xLab * sa + zLab * ca;
     } catch (const std::exception& error) {
-      throw std::runtime_error(
-          std::string("B0TrackerStubSeeder: cannot derive zFieldEntrance from B0PF "
-                      "geometry; set B0TrackerStubSeeder:zFieldEntrance or provide "
-                      "B0PF_CenterPosition and B0PF_Length (") +
-          error.what() + ")");
+      warning("B0TrackerStubSeeder: cannot derive the B0pf entrance from the geometry "
+              "({}); set zFieldEntrance explicitly or provide B0PF_CenterPosition and "
+              "B0PF_Length. The seeder is disabled and will produce no seeds",
+              error.what());
+      m_enabled = false;
+      return;
     }
   }
   if (!std::isfinite(m_z_field_entrance)) {
@@ -672,6 +703,7 @@ void B0TrackerStubSeeder::init() {
 
   m_stations.clear();
   m_volume_to_station.clear();
+  m_volume_axes.clear();
   std::vector<double> surfaceZ;
   std::vector<std::uint64_t> surfaceVolumes;
   auto volman = detector->volumeManager();
@@ -680,12 +712,22 @@ void B0TrackerStubSeeder::init() {
       continue;
     }
     std::string path;
+    b0stub::SensorAxes axes;
     try {
       const auto* volumeContext = volman.lookupContext(volId);
       if (volumeContext == nullptr) {
         continue;
       }
       path = volumeContext->element.path();
+      // TrackerHitReconstruction writes the hit variances along the local axes
+      // of the DD4hep sensitive volume; record where those axes point in the
+      // ion frame so the variances can be rotated onto the fit axes.
+      const dd4hep::Position origin = volumeContext->localToWorld({0.0, 0.0, 0.0});
+      const dd4hep::Position localX = volumeContext->localToWorld({1.0, 0.0, 0.0}) - origin;
+      const dd4hep::Position localY = volumeContext->localToWorld({0.0, 1.0, 0.0}) - origin;
+      axes = b0stub::sensorAxesInIonFrame({.x = localX.x(), .y = localX.y(), .z = localX.z()},
+                                          {.x = localY.x(), .y = localY.y(), .z = localY.z()},
+                                          m_crossing_angle);
     } catch (const std::exception&) {
       continue;
     }
@@ -693,7 +735,8 @@ void B0TrackerStubSeeder::init() {
         path.find("Companion") != std::string::npos) {
       continue;
     }
-    const auto center = surface->center(m_acts_context->getActsGeometryContext());
+    m_volume_axes[volId] = axes;
+    const auto center    = surface->center(m_acts_context->getActsGeometryContext());
     const double zIon =
         center.x() / Acts::UnitConstants::mm * sa + center.z() / Acts::UnitConstants::mm * ca;
     if (!std::isfinite(zIon)) {
@@ -723,7 +766,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   const auto [hits]                 = input;
   auto [seeds, track_params_output] = output;
 
-  if (hits->empty()) {
+  if (!m_enabled || hits->empty()) {
     return;
   }
 
@@ -731,27 +774,53 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   const double sa = std::sin(m_crossing_angle);
 
   // ------------------------------------------------------------------
-  // Rotate hit positions into the ion frame and group them by station.
+  // Rotate hit positions and variances into the ion frame and group them
+  // by station. One DD4hep volume lookup per hit serves both.
   // ------------------------------------------------------------------
+  const auto* converter =
+      m_volume_axes.empty() ? nullptr : algorithms::GeoSvc::instance().cellIDPositionConverter();
+  const auto lookupVolume = [&](const edm4eic::TrackerHit& hit) -> std::uint64_t {
+    if (converter == nullptr) {
+      return 0;
+    }
+    try {
+      const auto* volumeContext = converter->findContext(hit.getCellID());
+      return volumeContext == nullptr ? 0 : volumeContext->identifier;
+    } catch (const std::exception&) {
+      return 0;
+    }
+  };
   std::vector<b0stub::Point3> ion;
   ion.reserve(hits->size());
   std::vector<edm4eic::TrackerHit> ionHits;
   ionHits.reserve(hits->size());
+  std::vector<std::uint64_t> ionVolumes;
+  ionVolumes.reserve(hits->size());
 
   for (const auto& hit : *hits) {
     const auto& p          = hit.getPosition();
     const auto& covariance = hit.getPositionError();
-    // TrackerHit position covariance is expressed in the sensor surface frame.
-    // The B0 sensor planes rotate with the assembly, so their local axes are
-    // precisely the ion-frame bend/non-bend axes used by this fit.
-    const b0stub::Point3 q{p.x * ca - p.z * sa, p.y, p.x * sa + p.z * ca, covariance.xx,
-                           covariance.yy};
+    const auto volumeId    = lookupVolume(hit);
+    // The hit covariance is diagonal along the sensor's local axes. Rotate it
+    // onto the ion-frame bend/non-bend axes; without a known sensor
+    // orientation assume the axes coincide, which is exact for square pitch.
+    const auto axes = m_volume_axes.find(volumeId);
+    const auto variances =
+        axes == m_volume_axes.end()
+            ? std::pair<double, double>{covariance.xx, covariance.yy}
+            : b0stub::rotateVariances(axes->second, covariance.xx, covariance.yy);
+    const b0stub::Point3 q{.x         = p.x * ca - p.z * sa,
+                           .y         = p.y,
+                           .z         = p.x * sa + p.z * ca,
+                           .varianceX = variances.first,
+                           .varianceY = variances.second};
     if (!(std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z))) {
       debug("Skipping B0 hit with non-finite position");
       continue;
     }
     ion.push_back(q);
     ionHits.push_back(hit);
+    ionVolumes.push_back(volumeId);
   }
   if (ion.empty()) {
     return;
@@ -763,24 +832,12 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // z-gap clustering is. Hits that do not match a surface station (or, if
   // no surfaces were found, the per-event fallback) are dropped.
   std::map<unsigned int, std::vector<std::size_t>> byStation;
-  const auto* converter = m_volume_to_station.empty()
-                              ? nullptr
-                              : algorithms::GeoSvc::instance().cellIDPositionConverter();
   if (!m_stations.empty()) {
     for (std::size_t i = 0; i < ion.size(); ++i) {
       int station = -1;
-      if (converter != nullptr) {
-        try {
-          const auto* volumeContext = converter->findContext(ionHits[i].getCellID());
-          if (volumeContext != nullptr) {
-            const auto found = m_volume_to_station.find(volumeContext->identifier);
-            if (found != m_volume_to_station.end()) {
-              station = static_cast<int>(found->second);
-            }
-          }
-        } catch (const std::exception&) {
-          station = -1;
-        }
+      if (const auto found = m_volume_to_station.find(ionVolumes[i]);
+          found != m_volume_to_station.end()) {
+        station = static_cast<int>(found->second);
       }
       if (station < 0) {
         station = b0stub::assignStation(ion[i].z, m_stations, m_cfg.stationZGap);
@@ -937,8 +994,10 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       return false;
     }
 
+    // Exactly zero curvature would be emitted as an infinite-momentum seed
+    // under both charge hypotheses; there is nothing to seed with.
     cand.qOverP = cand.bendFit.qOverP;
-    if (!std::isfinite(cand.qOverP) ||
+    if (!std::isfinite(cand.qOverP) || cand.qOverP == 0.0 ||
         (m_cfg.pMin > 0.0 && std::abs(cand.qOverP) > 1.0 / m_cfg.pMin)) {
       return false;
     }

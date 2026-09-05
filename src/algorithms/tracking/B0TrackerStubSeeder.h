@@ -14,6 +14,7 @@
 #include <memory>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "algorithms/interfaces/WithPodConfig.h"
@@ -173,6 +174,24 @@ namespace b0stub {
                                     double minCurvatureSignificance, int inferredCharge,
                                     bool testBothCharges, int configuredCharge);
 
+  /// In-plane components of a sensor's local measurement axes (u, v) expressed
+  /// in the ion frame: u = (ux, uy), v = (vx, vy).
+  struct SensorAxes {
+    double ux{1.0};
+    double uy{0.0};
+    double vx{0.0};
+    double vy{1.0};
+  };
+
+  /// Sensor axes from the unit vectors of the local x and y axes in the lab
+  /// frame, rotated by the crossing angle like the hit positions.
+  SensorAxes sensorAxesInIonFrame(const Point3& localX, const Point3& localY, double crossingAngle);
+
+  /// Diagonal ion-frame variances (bend, non-bend) of a measurement with
+  /// independent variances `varianceU`, `varianceV` along the sensor axes.
+  std::pair<double, double> rotateVariances(const SensorAxes& axes, double varianceU,
+                                            double varianceV);
+
 } // namespace b0stub
 
 using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
@@ -209,6 +228,9 @@ private:
   double m_z_face_lab{0.0};
   std::vector<b0stub::StationInterval> m_stations;
   std::unordered_map<std::uint64_t, unsigned int> m_volume_to_station;
+  std::unordered_map<std::uint64_t, b0stub::SensorAxes> m_volume_axes;
+  /// False when the geometry has no B0 to seed; process() then emits nothing.
+  bool m_enabled{true};
 };
 
 } // namespace eicrecon
