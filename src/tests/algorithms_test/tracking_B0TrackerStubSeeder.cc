@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <vector>
 
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
@@ -83,18 +84,22 @@ TEST_CASE("B0 stub fit recovers the generating trajectory", "[B0TrackerStubSeede
 }
 
 TEST_CASE("B0 stub fit needs at least three points", "[B0TrackerStubSeeder]") {
-  std::vector<Point3> pts{{0.0, 0.0, 5902.0}, {1.0, 0.0, 6172.0}};
+  std::vector<Point3> pts{{.x = 0.0, .y = 0.0, .z = 5902.0}, {.x = 1.0, .y = 0.0, .z = 6172.0}};
   CHECK_FALSE(fitStub(pts).valid);
 }
 
 TEST_CASE("B0 stub fit rejects degenerate z", "[B0TrackerStubSeeder]") {
-  std::vector<Point3> pts{{0.0, 0.0, 6000.0}, {1.0, 0.0, 6000.0}, {2.0, 0.0, 6000.0}};
+  std::vector<Point3> pts{{.x = 0.0, .y = 0.0, .z = 6000.0},
+                          {.x = 1.0, .y = 0.0, .z = 6000.0},
+                          {.x = 2.0, .y = 0.0, .z = 6000.0}};
   CHECK_FALSE(fitStub(pts).valid);
 }
 
 TEST_CASE("B0 stub fit rejects a rank-deficient quadratic", "[B0TrackerStubSeeder]") {
-  std::vector<Point3> pts{
-      {0.0, 0.0, 5902.0}, {1.0, 0.0, 5902.0}, {2.0, 0.0, 6172.0}, {3.0, 0.0, 6172.0}};
+  std::vector<Point3> pts{{.x = 0.0, .y = 0.0, .z = 5902.0},
+                          {.x = 1.0, .y = 0.0, .z = 5902.0},
+                          {.x = 2.0, .y = 0.0, .z = 6172.0},
+                          {.x = 3.0, .y = 0.0, .z = 6172.0}};
   CHECK_FALSE(fitStub(pts).valid);
 }
 
@@ -106,10 +111,10 @@ TEST_CASE("B0 weighted fit derives coefficient covariance", "[B0TrackerStubSeede
   REQUIRE(fit.valid);
   REQUIRE(fit.covarianceValid);
   for (int i = 0; i < 3; ++i) {
-    CHECK(fit.covarianceX[3 * i + i] > 0.0);
+    CHECK(fit.covarianceX.at(3 * i + i) > 0.0);
   }
   for (int i = 0; i < 2; ++i) {
-    CHECK(fit.covarianceY[2 * i + i] > 0.0);
+    CHECK(fit.covarianceY.at(2 * i + i) > 0.0);
   }
 
   const StubFit scaled =
@@ -204,28 +209,30 @@ TEST_CASE("B0 bend fit steps back through a lower-field gap exactly", "[B0Tracke
   CHECK(same.xReference == Approx(uniform.xReference).margin(1e-9));
   CHECK(same.txReference == Approx(uniform.txReference).margin(1e-12));
   for (int i = 0; i < 9; ++i) {
-    CHECK(same.covariance[i] == Approx(uniform.covariance[i]).epsilon(1e-9).margin(1e-30));
+    CHECK(same.covariance.at(i) == Approx(uniform.covariance.at(i)).epsilon(1e-9).margin(1e-30));
   }
 }
 
 TEST_CASE("B0 endpoint pruning keeps prompt pairs and rejects cross-pairs",
           "[B0TrackerStubSeeder]") {
-  const Point3 promptFirst{0.0, 12.0, 5902.0};
-  const Point3 promptLast{0.0, 12.0 * 6712.0 / 5902.0, 6712.0};
+  const Point3 promptFirst{.x = 0.0, .y = 12.0, .z = 5902.0};
+  const Point3 promptLast{.x = 0.0, .y = 12.0 * 6712.0 / 5902.0, .z = 6712.0};
   const auto prompt = endpointCompatibility(promptFirst, promptLast, 0.10, 5.0, true);
   REQUIRE(prompt.valid);
   CHECK(prompt.beamResidual == Approx(0.0).margin(1e-12));
 
   // This pair has a modest slope but extrapolates far from the beamline.
-  const auto cross =
-      endpointCompatibility({0.0, 100.0, 5902.0}, {0.0, 105.0, 6712.0}, 0.10, 5.0, true);
+  const auto cross = endpointCompatibility({.x = 0.0, .y = 100.0, .z = 5902.0},
+                                           {.x = 0.0, .y = 105.0, .z = 6712.0}, 0.10, 5.0, true);
   CHECK_FALSE(cross.valid);
-  const auto unconstrained =
-      endpointCompatibility({0.0, 100.0, 5902.0}, {0.0, 105.0, 6712.0}, 0.10, 5.0, false);
+  const auto unconstrained = endpointCompatibility(
+      {.x = 0.0, .y = 100.0, .z = 5902.0}, {.x = 0.0, .y = 105.0, .z = 6712.0}, 0.10, 5.0, false);
   CHECK(unconstrained.valid);
 
   CHECK_FALSE(
       endpointCompatibility({0.0, 0.0, 5902.0}, {0.0, 100.0, 6000.0}, 0.10, 5.0, true).valid);
+  // The reversed order is the point: a pair with the last hit first is not prompt.
+  // NOLINTNEXTLINE(readability-suspicious-call-argument)
   CHECK_FALSE(endpointCompatibility(promptLast, promptFirst, 0.10, 5.0, true).valid);
 }
 
@@ -264,47 +271,33 @@ std::vector<Point3> propagateTruth(const BoxQuadrupoleField& field, double qOver
                                    double ty0, const std::array<double, 4>& stations,
                                    double variance) {
   constexpr double kBend = 2.998e-4;
-  std::array<double, 6> state{0.0, 0.0, 0.0, tx0, ty0, 1.0};
-  const double norm = std::sqrt(tx0 * tx0 + ty0 * ty0 + 1.0);
-  for (int i = 3; i < 6; ++i) {
-    state[i] /= norm;
-  }
-  const auto derivative = [&](const std::array<double, 6>& s) {
-    const auto b = field(s[0], s[1], s[2]);
+  // State: position (0-2) and unit direction (3-5) in the ion frame.
+  using State = Eigen::Matrix<double, 6, 1>;
+  State state;
+  state << 0.0, 0.0, 0.0, tx0, ty0, 1.0;
+  state.tail<3>().normalize();
+  const auto derivative = [&](const State& s) {
+    const auto b = field(s(0), s(1), s(2));
     // d(dir)/ds = kappa (q/p) dir x B
-    return std::array<double, 6>{s[3],
-                                 s[4],
-                                 s[5],
-                                 kBend * qOverP * (s[4] * b[2] - s[5] * b[1]),
-                                 kBend * qOverP * (s[5] * b[0] - s[3] * b[2]),
-                                 kBend * qOverP * (s[3] * b[1] - s[4] * b[0])};
+    State d;
+    d << s(3), s(4), s(5), kBend * qOverP * (s(4) * b[2] - s(5) * b[1]),
+        kBend * qOverP * (s(5) * b[0] - s(3) * b[2]), kBend * qOverP * (s(3) * b[1] - s(4) * b[0]);
+    return d;
   };
   std::vector<Point3> out;
   const double h   = 1.0;
   std::size_t next = 0;
   while (next < stations.size()) {
-    std::array<double, 6> k1 = derivative(state);
-    std::array<double, 6> tmp;
-    for (int i = 0; i < 6; ++i) {
-      tmp[i] = state[i] + 0.5 * h * k1[i];
-    }
-    std::array<double, 6> k2 = derivative(tmp);
-    for (int i = 0; i < 6; ++i) {
-      tmp[i] = state[i] + 0.5 * h * k2[i];
-    }
-    std::array<double, 6> k3 = derivative(tmp);
-    for (int i = 0; i < 6; ++i) {
-      tmp[i] = state[i] + h * k3[i];
-    }
-    std::array<double, 6> k4       = derivative(tmp);
-    std::array<double, 6> previous = state;
-    for (int i = 0; i < 6; ++i) {
-      state[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
-    }
-    while (next < stations.size() && state[2] >= stations[next]) {
-      const double f = (stations[next] - previous[2]) / (state[2] - previous[2]);
-      out.push_back({previous[0] + f * (state[0] - previous[0]),
-                     previous[1] + f * (state[1] - previous[1]), stations[next], variance,
+    const State k1       = derivative(state);
+    const State k2       = derivative(state + 0.5 * h * k1);
+    const State k3       = derivative(state + 0.5 * h * k2);
+    const State k4       = derivative(state + h * k3);
+    const State previous = state;
+    state += h / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+    while (next < stations.size() && state(2) >= stations.at(next)) {
+      const double f = (stations.at(next) - previous(2)) / (state(2) - previous(2));
+      out.push_back({previous(0) + f * (state(0) - previous(0)),
+                     previous(1) + f * (state(1) - previous(1)), stations.at(next), variance,
                      variance});
       ++next;
     }
@@ -318,7 +311,8 @@ TEST_CASE("B0 seed recovers charge, momentum and direction of an RK4 truth track
           "[B0TrackerStubSeeder]") {
   constexpr double zEntrance     = 5800.0;
   constexpr double crossingAngle = -0.025;
-  const BoxQuadrupoleField field{zEntrance, zEntrance + 1200.0, 1.184, -8.12e-3};
+  const BoxQuadrupoleField field{
+      .zEntrance = zEntrance, .zExit = zEntrance + 1200.0, .dipole = 1.184, .gradient = -8.12e-3};
   constexpr double kBend = 2.998e-4;
 
   for (const double charge : {1.0, -1.0}) {
@@ -394,9 +388,9 @@ TEST_CASE("B0 bend-fit covariance propagates to correlated seed parameters",
   Eigen::Matrix<double, 5, 5> covariance;
   for (int row = 0; row < 5; ++row) {
     for (int col = 0; col < 5; ++col) {
-      covariance(row, col) = flat[5 * row + col];
-      CHECK(std::isfinite(flat[5 * row + col]));
-      CHECK(flat[5 * row + col] == Approx(flat[5 * col + row]).margin(1e-15));
+      covariance(row, col) = flat.at(5 * row + col);
+      CHECK(std::isfinite(flat.at(5 * row + col)));
+      CHECK(flat.at(5 * row + col) == Approx(flat.at(5 * col + row)).margin(1e-15));
     }
   }
   CHECK(covariance(2, 2) > 0.0);
@@ -413,8 +407,9 @@ TEST_CASE("B0 perigee parameters of a ray through the origin", "[B0TrackerStubSe
   // A ray leaving the origin at 25 mrad in the x-z plane: it passes through the
   // perigee line, so both local coordinates must vanish.
   const double slope = 0.025;
-  const Point3 dir{slope, 0.0, 1.0};
-  const auto par = perigeeFromRay({0.0, 0.0, 0.0}, dir, {0.0, 0.0, 0.0});
+  const Point3 dir{.x = slope, .y = 0.0, .z = 1.0};
+  const auto par =
+      perigeeFromRay({.x = 0.0, .y = 0.0, .z = 0.0}, dir, {.x = 0.0, .y = 0.0, .z = 0.0});
 
   CHECK(par.loc0 == Approx(0.0).margin(1e-9));
   CHECK(par.loc1 == Approx(0.0).margin(1e-9));
@@ -425,7 +420,8 @@ TEST_CASE("B0 perigee parameters of a ray through the origin", "[B0TrackerStubSe
 TEST_CASE("B0 perigee parameters of a displaced ray", "[B0TrackerStubSeeder]") {
   // Parallel to z, offset by +3 mm in y: the impact parameter is 3 mm and the
   // track is at phi = pi/2 relative to the point of closest approach.
-  const auto par = perigeeFromRay({0.0, 3.0, 1000.0}, {0.0, 0.0, 1.0}, {0.0, 0.0, 0.0});
+  const auto par = perigeeFromRay({.x = 0.0, .y = 3.0, .z = 1000.0}, {.x = 0.0, .y = 0.0, .z = 1.0},
+                                  {.x = 0.0, .y = 0.0, .z = 0.0});
   CHECK(std::abs(par.loc0) == Approx(3.0).epsilon(1e-9));
   CHECK(par.theta == Approx(0.0).margin(1e-9));
 }
@@ -433,9 +429,11 @@ TEST_CASE("B0 perigee parameters of a displaced ray", "[B0TrackerStubSeeder]") {
 TEST_CASE("B0 perigee follows the surface it is expressed on", "[B0TrackerStubSeeder]") {
   // The same ray, expressed on a perigee surface at the field entrance rather
   // than at the origin: loc1 is measured from the surface centre.
-  const Point3 dir{0.025, 0.0, 1.0};
-  const auto atOrigin   = perigeeFromRay({0.0, 0.0, 0.0}, dir, {0.0, 0.0, 0.0});
-  const auto atEntrance = perigeeFromRay({0.0, 0.0, 0.0}, dir, {0.0, 0.0, 5800.0});
+  const Point3 dir{.x = 0.025, .y = 0.0, .z = 1.0};
+  const auto atOrigin =
+      perigeeFromRay({.x = 0.0, .y = 0.0, .z = 0.0}, dir, {.x = 0.0, .y = 0.0, .z = 0.0});
+  const auto atEntrance =
+      perigeeFromRay({.x = 0.0, .y = 0.0, .z = 0.0}, dir, {.x = 0.0, .y = 0.0, .z = 5800.0});
 
   CHECK(atOrigin.theta == Approx(atEntrance.theta).epsilon(1e-12));
   CHECK(atOrigin.phi == Approx(atEntrance.phi).epsilon(1e-12));
@@ -450,8 +448,8 @@ TEST_CASE("B0 station clustering keeps official and realistic disks split",
     const auto clustered = clusterStations({stations.begin(), stations.end()}, gap);
     REQUIRE(clustered.size() == 4);
     for (std::size_t i = 0; i < stations.size(); ++i) {
-      CHECK(clustered[i].zMean == Approx(stations[i]).margin(1e-9));
-      CHECK(assignStation(stations[i], clustered, gap) == static_cast<int>(i));
+      CHECK(clustered[i].zMean == Approx(stations.at(i)).margin(1e-9));
+      CHECK(assignStation(stations.at(i), clustered, gap) == static_cast<int>(i));
     }
   }
   CHECK(kRealisticStationZ[1] - kRealisticStationZ[0] == Approx(269.93).margin(1e-9));
@@ -469,7 +467,7 @@ TEST_CASE("B0 station clustering merges realistic front/back faces", "[B0Tracker
   const auto clustered = clusterStations(surfaceZ, gap);
   REQUIRE(clustered.size() == 4);
   for (std::size_t i = 0; i < kRealisticStationZ.size(); ++i) {
-    CHECK(clustered[i].zMean == Approx(kRealisticStationZ[i]).margin(1e-9));
+    CHECK(clustered[i].zMean == Approx(kRealisticStationZ.at(i)).margin(1e-9));
     CHECK(clustered[i].zMax - clustered[i].zMin == Approx(7.0).margin(1e-9));
   }
 }
@@ -562,7 +560,7 @@ TEST_CASE("B0 sensor axes rotate hit variances onto the ion frame", "[B0TrackerS
   CHECK(std::abs(swapped.second - 1.0) < 1e-12);
 
   // Rotated by 45 degrees: both ion-frame variances are the mean.
-  const double r      = 1.0 / std::sqrt(2.0);
+  const double r      = 1.0 / std::numbers::sqrt2;
   const auto diagonal = rotateVariances(
       sensorAxesInIonFrame({.x = r, .y = r, .z = 0.0}, {.x = -r, .y = r, .z = 0.0}, 0.0), 1.0, 4.0);
   CHECK(std::abs(diagonal.first - 2.5) < 1e-12);

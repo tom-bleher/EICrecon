@@ -65,6 +65,13 @@
 
 namespace eicrecon {
 
+namespace {
+  /// Row-major views of the flat covariance arrays in StubFit and BendFit.
+  using RowMajor2 = Eigen::Matrix<double, 2, 2, Eigen::RowMajor>;
+  using RowMajor3 = Eigen::Matrix<double, 3, 3, Eigen::RowMajor>;
+  using RowMajor5 = Eigen::Matrix<double, 5, 5, Eigen::RowMajor>;
+} // namespace
+
 namespace b0stub {
 
   /// Bend constant: x'' [1/mm] = kBend * (q/p) [1/GeV] * B [T]
@@ -134,14 +141,10 @@ namespace b0stub {
     if (decompositionX.rank() < 3 || decompositionY.rank() < 2) {
       return fit;
     }
-    const Eigen::Vector3d ax = decompositionX.solve(weightedValuesX);
-    const Eigen::Vector2d ay = decompositionY.solve(weightedValuesY);
-    for (int i = 0; i < 3; ++i) {
-      fit.basisX[i] = ax(i);
-    }
-    for (int i = 0; i < 2; ++i) {
-      fit.basisY[i] = ay(i);
-    }
+    const Eigen::Vector3d ax                       = decompositionX.solve(weightedValuesX);
+    const Eigen::Vector2d ay                       = decompositionY.solve(weightedValuesY);
+    Eigen::Map<Eigen::Vector3d>(fit.basisX.data()) = ax;
+    Eigen::Map<Eigen::Vector2d>(fit.basisY.data()) = ay;
 
     // Convert back from the shifted/scaled variable to plain powers of z.
     fit.c2 = ax(2) / (zScale * zScale);
@@ -158,17 +161,9 @@ namespace b0stub {
 
       if (covAx.allFinite() && covAy.allFinite() && (covAx.diagonal().array() > 0.0).all() &&
           (covAy.diagonal().array() > 0.0).all()) {
-        for (int row = 0; row < 3; ++row) {
-          for (int col = 0; col < 3; ++col) {
-            fit.covarianceX[3 * row + col] = covAx(row, col);
-          }
-        }
-        for (int row = 0; row < 2; ++row) {
-          for (int col = 0; col < 2; ++col) {
-            fit.covarianceY[2 * row + col] = covAy(row, col);
-          }
-        }
-        fit.covarianceValid = true;
+        Eigen::Map<RowMajor3>(fit.covarianceX.data()) = covAx;
+        Eigen::Map<RowMajor2>(fit.covarianceY.data()) = covAy;
+        fit.covarianceValid                           = true;
       }
     }
 
@@ -221,20 +216,11 @@ namespace b0stub {
       jacobian << 1.0, u1 - gap / s, u1 * u1 - 2.0 * u1 * gap / s - 0.5 * kGap * gap * dQdA2, //
           0.0, 1.0 / s, 2.0 * u1 / s + kGap * dQdA2,                                          //
           0.0, 0.0, dQdA2;
-      Eigen::Matrix3d covAx;
-      for (int row = 0; row < 3; ++row) {
-        for (int col = 0; col < 3; ++col) {
-          covAx(row, col) = fit.covarianceX[3 * row + col];
-        }
-      }
+      const Eigen::Matrix3d covAx      = Eigen::Map<const RowMajor3>(fit.covarianceX.data());
       const Eigen::Matrix3d covariance = jacobian * covAx * jacobian.transpose();
       if (covariance.allFinite() && (covariance.diagonal().array() > 0.0).all()) {
-        for (int row = 0; row < 3; ++row) {
-          for (int col = 0; col < 3; ++col) {
-            bend.covariance[3 * row + col] = covariance(row, col);
-          }
-        }
-        bend.covarianceValid = true;
+        Eigen::Map<RowMajor3>(bend.covariance.data()) = covariance;
+        bend.covarianceValid                          = true;
       }
     }
 
@@ -344,16 +330,17 @@ namespace b0stub {
     if (ordered.empty() || !(gap > 0.0)) {
       return stations;
     }
-    std::sort(ordered.begin(), ordered.end());
+    std::ranges::sort(ordered);
 
-    StationInterval current{ordered.front(), ordered.front(), ordered.front()};
+    StationInterval current{
+        .zMin = ordered.front(), .zMax = ordered.front(), .zMean = ordered.front()};
     double sum    = ordered.front();
     std::size_t n = 1;
     for (std::size_t i = 1; i < ordered.size(); ++i) {
       if (ordered[i] - current.zMax > gap) {
         current.zMean = sum / static_cast<double>(n);
         stations.push_back(current);
-        current = {ordered[i], ordered[i], ordered[i]};
+        current = {.zMin = ordered[i], .zMax = ordered[i], .zMean = ordered[i]};
         sum     = ordered[i];
         n       = 1;
       } else {
@@ -405,8 +392,7 @@ namespace b0stub {
 
     std::vector<std::size_t> order(hitZ.size());
     std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(),
-              [&](std::size_t a, std::size_t b) { return hitZ[a] < hitZ[b]; });
+    std::ranges::sort(order, [&](std::size_t a, std::size_t b) { return hitZ[a] < hitZ[b]; });
     unsigned int station = 0;
     double lastZ         = hitZ[order.front()];
     for (const std::size_t idx : order) {
@@ -446,9 +432,11 @@ namespace {
 
   EntranceFit entranceFit(const b0stub::BendFit& bendFit, const b0stub::StubFit& nonBendFit) {
     const double u = (bendFit.zReference - nonBendFit.zRef) / nonBendFit.zScale;
-    return {bendFit.xReference, bendFit.txReference, bendFit.qOverP,
-            nonBendFit.basisY[0] + nonBendFit.basisY[1] * u,
-            nonBendFit.basisY[1] / nonBendFit.zScale};
+    return {.x      = bendFit.xReference,
+            .tx     = bendFit.txReference,
+            .qOverP = bendFit.qOverP,
+            .y      = nonBendFit.basisY[0] + nonBendFit.basisY[1] * u,
+            .ty     = nonBendFit.basisY[1] / nonBendFit.zScale};
   }
 
   SeedVector seedStateFromEntrance(const EntranceFit& entrance, double zFieldEntrance,
@@ -456,25 +444,14 @@ namespace {
     const double ca = std::cos(crossingAngle);
     const double sa = std::sin(crossingAngle);
 
-    double txi;
-    double tyi;
-    double x0;
-    double y0;
-    if (constrainToBeamline) {
-      txi = entrance.x / zFieldEntrance;
-      tyi = entrance.y / zFieldEntrance;
-      x0  = 0.0;
-      y0  = 0.0;
-    } else {
-      txi = entrance.tx;
-      tyi = entrance.ty;
-      x0  = entrance.x - entrance.tx * zFieldEntrance;
-      y0  = entrance.y - entrance.ty * zFieldEntrance;
-    }
+    const double txi = constrainToBeamline ? entrance.x / zFieldEntrance : entrance.tx;
+    const double tyi = constrainToBeamline ? entrance.y / zFieldEntrance : entrance.ty;
+    const double x0  = constrainToBeamline ? 0.0 : entrance.x - entrance.tx * zFieldEntrance;
+    const double y0  = constrainToBeamline ? 0.0 : entrance.y - entrance.ty * zFieldEntrance;
 
-    const b0stub::Point3 dir{txi * ca + sa, tyi, -txi * sa + ca};
-    const b0stub::Point3 ref{x0 * ca, y0, -x0 * sa};
-    const auto perigee = b0stub::perigeeFromRay(ref, dir, {0.0, 0.0, 0.0});
+    const b0stub::Point3 dir{.x = txi * ca + sa, .y = tyi, .z = -txi * sa + ca};
+    const b0stub::Point3 ref{.x = x0 * ca, .y = y0, .z = -x0 * sa};
+    const auto perigee = b0stub::perigeeFromRay(ref, dir, {.x = 0.0, .y = 0.0, .z = 0.0});
 
     SeedVector state;
     state << perigee.loc0, perigee.loc1, perigee.phi, perigee.theta, entrance.qOverP;
@@ -495,19 +472,10 @@ namespace {
       return result;
     }
 
-    SeedMatrix fitCovariance = SeedMatrix::Zero();
-    for (int row = 0; row < 3; ++row) {
-      for (int col = 0; col < 3; ++col) {
-        fitCovariance(row, col) = bendFit.covariance[3 * row + col];
-      }
-    }
-    Eigen::Matrix2d yCovariance;
-    for (int row = 0; row < 2; ++row) {
-      for (int col = 0; col < 2; ++col) {
-        yCovariance(row, col) = nonBendFit.covarianceY[2 * row + col];
-      }
-    }
-    const double uEntrance = (bendFit.zReference - nonBendFit.zRef) / nonBendFit.zScale;
+    SeedMatrix fitCovariance          = SeedMatrix::Zero();
+    fitCovariance.block<3, 3>(0, 0)   = Eigen::Map<const RowMajor3>(bendFit.covariance.data());
+    const Eigen::Matrix2d yCovariance = Eigen::Map<const RowMajor2>(nonBendFit.covarianceY.data());
+    const double uEntrance            = (bendFit.zReference - nonBendFit.zRef) / nonBendFit.zScale;
     Eigen::Matrix2d yTransform;
     yTransform << 1.0, uEntrance, 0.0, 1.0 / nonBendFit.zScale;
     fitCovariance.block<2, 2>(3, 3) = yTransform * yCovariance * yTransform.transpose();
@@ -518,10 +486,10 @@ namespace {
     SeedMatrix jacobian = SeedMatrix::Zero();
     for (int column = 0; column < 5; ++column) {
       const double sigma = std::sqrt(std::max(0.0, fitCovariance(column, column)));
-      const double step  = std::max({1.0e-10, sigma * 1.0e-3, std::abs(values[column]) * 1.0e-7});
-      auto plus          = nominal;
-      auto minus         = nominal;
-      double* plusValue  = nullptr;
+      const double step = std::max({1.0e-10, sigma * 1.0e-3, std::abs(values.at(column)) * 1.0e-7});
+      auto plus         = nominal;
+      auto minus        = nominal;
+      double* plusValue = nullptr;
       double* minusValue = nullptr;
       switch (column) {
       case 0:
@@ -579,11 +547,7 @@ namespace b0stub {
     const SeedMatrix covariance =
         propagateFitCovariance(bendFit, nonBendFit, crossingAngle, constrainToBeamline);
     std::array<double, 25> result{};
-    for (int row = 0; row < 5; ++row) {
-      for (int col = 0; col < 5; ++col) {
-        result[5 * row + col] = covariance(row, col);
-      }
-    }
+    Eigen::Map<RowMajor5>(result.data()) = covariance;
     return result;
   }
 
@@ -854,7 +818,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     byStation = b0stub::groupHitsByStation(hitZ, {}, m_cfg.stationZGap);
   }
   for (auto& [stationIndex, indices] : byStation) {
-    std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
+    std::ranges::sort(indices, [&](std::size_t a, std::size_t b) {
       return std::tie(ion[a].x, ion[a].y, ion[a].z) < std::tie(ion[b].x, ion[b].y, ion[b].z);
     });
   }
@@ -862,7 +826,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // The auxiliary and field-integral fits need >= 3 points, so 3 stations is the hard floor
   // regardless of configuration (a 2-station mode would need a line fit with
   // a momentum prior instead).
-  const unsigned int minStations = std::max(m_cfg.minStations, 3u);
+  const unsigned int minStations = std::max(m_cfg.minStations, 3U);
   if (byStation.size() < minStations) {
     return;
   }
@@ -905,7 +869,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // exhaust it inside the full-station set and starve the leave-one-out
   // subsets that exist to recover kinked tracks.
   const unsigned int perSubsetBudget =
-      std::max(1u, m_cfg.maxCombinations / static_cast<unsigned int>(subsets.size()));
+      std::max(1U, m_cfg.maxCombinations / static_cast<unsigned int>(subsets.size()));
 
   auto makeCompatible = [&](StubCandidate& cand) -> bool {
     // The y residual is only tested after the quadrupole bending has been
@@ -914,11 +878,10 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       return false;
     }
 
-    const auto zMinMax =
-        std::minmax_element(cand.hitIndices.begin(), cand.hitIndices.end(),
-                            [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
-    const double zFirst = ion[*zMinMax.first].z;
-    const double zLast  = ion[*zMinMax.second].z;
+    const auto zMinMax = std::ranges::minmax_element(
+        cand.hitIndices, [&](std::size_t a, std::size_t b) { return ion[a].z < ion[b].z; });
+    const double zFirst = ion[*zMinMax.min].z;
+    const double zLast  = ion[*zMinMax.max].z;
     // Ion-frame z at which this track crosses the magnet entrance face. The
     // face is a plane of constant lab z, so its ion z shifts by x_lab * sin(a)
     // from track to track; ignoring that mis-integrates the hard field edge
@@ -1047,13 +1010,11 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         compatibleEndpoints.push_back({hFirst, hLast, compatibility});
       }
     }
-    std::sort(compatibleEndpoints.begin(), compatibleEndpoints.end(),
-              [&](const EndpointPair& a, const EndpointPair& b) {
-                return std::tie(a.compatibility.score, ion[a.first].x, ion[a.first].y,
-                                ion[a.last].x, ion[a.last].y) <
-                       std::tie(b.compatibility.score, ion[b.first].x, ion[b.first].y,
-                                ion[b.last].x, ion[b.last].y);
-              });
+    std::ranges::sort(compatibleEndpoints, [&](const EndpointPair& a, const EndpointPair& b) {
+      return std::tie(a.compatibility.score, ion[a.first].x, ion[a.first].y, ion[a.last].x,
+                      ion[a.last].y) < std::tie(b.compatibility.score, ion[b.first].x,
+                                                ion[b.first].y, ion[b.last].x, ion[b.last].y);
+    });
 
     unsigned int tried = 0;
     bool budgetHit     = false;
@@ -1064,7 +1025,6 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       const std::size_t hFirst = endpoints.first;
       const std::size_t hLast  = endpoints.last;
       const double zA          = ion[hFirst].z;
-      const double zB          = ion[hLast].z;
       const double slopeY      = endpoints.compatibility.slopeY;
 
       // Candidate hits per intermediate station, inside the y road.
@@ -1080,7 +1040,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
             ranked.emplace_back(residual, idx);
           }
         }
-        std::sort(ranked.begin(), ranked.end(), [&](const auto& a, const auto& b) {
+        std::ranges::sort(ranked, [&](const auto& a, const auto& b) {
           return std::tie(a.first, ion[a.second].x, ion[a.second].y, ion[a.second].z) <
                  std::tie(b.first, ion[b.second].x, ion[b.second].y, ion[b.second].z);
         });
@@ -1157,14 +1117,13 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // More stations first (a 3-point auxiliary fit interpolates exactly, so raw
   // residuals would always favour subsets over genuine full-station
   // candidates), then residual within equal station count.
-  std::sort(candidates.begin(), candidates.end(),
-            [](const StubCandidate& a, const StubCandidate& b) {
-              if (a.hitIndices.size() != b.hitIndices.size()) {
-                return a.hitIndices.size() > b.hitIndices.size();
-              }
-              return a.fit.rmsX * a.fit.rmsX + a.fit.rmsY * a.fit.rmsY <
-                     b.fit.rmsX * b.fit.rmsX + b.fit.rmsY * b.fit.rmsY;
-            });
+  std::ranges::sort(candidates, [](const StubCandidate& a, const StubCandidate& b) {
+    if (a.hitIndices.size() != b.hitIndices.size()) {
+      return a.hitIndices.size() > b.hitIndices.size();
+    }
+    return a.fit.rmsX * a.fit.rmsX + a.fit.rmsY * a.fit.rmsY <
+           b.fit.rmsX * b.fit.rmsX + b.fit.rmsY * b.fit.rmsY;
+  });
 
   // Two hits are "the same" for sharing purposes if they are one hit, or if
   // they sit at the same station within sharedHitDistance of each other -
@@ -1242,7 +1201,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         if (!std::isfinite(covariance(i, i)) || covariance(i, i) <= 0.0) {
           covariance.row(i).setZero();
           covariance.col(i).setZero();
-          covariance(i, i) = fallbackVariances[i];
+          covariance(i, i) = fallbackVariances.at(i);
         }
       }
       const auto scattering = b0stub::scatteringCovarianceAdditions(
@@ -1269,7 +1228,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       trackparam.setCovariance(cov);
 
       auto seed = seeds->create();
-      seed.setPerigee({0.f, 0.f, 0.f});
+      seed.setPerigee({0.F, 0.F, 0.F});
       // Larger is better for ACTS seed quality; use the negative mean residual.
       seed.setQuality(
           static_cast<float>(-(cand->fit.rmsX * cand->fit.rmsX + cand->fit.rmsY * cand->fit.rmsY)));
