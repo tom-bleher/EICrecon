@@ -25,7 +25,13 @@ void InitPlugin(JApplication* app) {
       "B0TrackerRawHits", {"EventHeader", "B0TrackerHits"},
       {"B0TrackerRawHits", "B0TrackerRawHitLinks", "B0TrackerRawHitAssociations"},
       {
-          .threshold      = 10.0 * dd4hep::keV,
+          // The realistic B0 sensor is 50 um thick (B0TrackerSensorThickness), so
+          // a minimum-ionising proton deposits only ~14 keV most probably and 10 %
+          // of hits fall below the 10 keV inherited from the far-forward Roman
+          // pots. Use the central silicon value: on a 41 GeV proton gun this
+          // takes the stub-seeded efficiency from 79 % to 85 % and the fraction
+          // of four-measurement tracks from 72 % to 91 %, at unchanged fake rate.
+          .threshold      = 0.54 * dd4hep::keV,
           .timeResolution = 30 * edm4eic::unit::ps,
       },
       app));
