@@ -322,8 +322,10 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFTruthSeededActsTracksUnfiltered",
       },
       {
-          // Keep the B0 telescope exception of three measurements, while
-          // inheriting the framework CKF chi2 default (15).
+          // Keep the B0 telescope exception of three measurements. The chi2 cut
+          // is loosened from the framework default (15) for the same reason as
+          // the stub-seeded chain below.
+          .chi2CutOff         = {50.},
           .numMeasurementsMin = 3,
       },
       app));
@@ -391,9 +393,14 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFActsTracksUnfiltered",
       },
       {
-          // Use the framework CKF default (chi2CutOff = 15). The B0 stub
-          // seeder has its own compatibility ranking; a looser CKF cut must
-          // be justified by a dedicated background/fake-rate study.
+          // With only four stations, a proton that scatters hard once loses
+          // its downstream hits to the chi2 cut and the track with them. On
+          // 60k DVCS and 30k proton-gun events, chi2 15 -> 50 recovers 2.2
+          // points of efficiency for +0.1 % fakes and a 0.05-point resolution
+          // cost (50 / 100 / 300 give 83.1 / 83.9 / 84.7 % against 80.9 %).
+          // Provisional: the fake-rate side has only been checked on DVCS, not
+          // on a beam-gas or synchrotron background overlay.
+          .chi2CutOff         = {50.},
           .numMeasurementsMin = 3,
       },
       app));
