@@ -71,10 +71,13 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       double layerEnvelopeR = m_acts_provider->getLayerEnvelopeR();
       double layerEnvelopeZ = m_acts_provider->getLayerEnvelopeZ();
       m_app->SetDefaultParameter("acts:LayerEnvelopeR", layerEnvelopeR,
-                                 "Radial envelope added around each tracking layer [mm]");
+                                 "Radial pad added to the bounds of each subdetector tracking "
+                                 "volume beyond its outermost layers [mm]");
       m_app->SetDefaultParameter("acts:LayerEnvelopeZ", layerEnvelopeZ,
-                                 "Longitudinal envelope added around each tracking layer [mm]; "
-                                 "must cover r*tan(tilt) for layers tilted off the beam axis");
+                                 "Longitudinal pad added to the z bounds of each subdetector "
+                                 "tracking volume beyond its outermost layers [mm]; must cover "
+                                 "r*tan(tilt) of layers tilted off the beam axis and stay below "
+                                 "half the z gap to the neighbouring volume");
       m_acts_provider->setLayerEnvelopeR(layerEnvelopeR);
       m_acts_provider->setLayerEnvelopeZ(layerEnvelopeZ);
 
