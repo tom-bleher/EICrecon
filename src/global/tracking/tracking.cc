@@ -32,6 +32,8 @@
 #include "factories/tracking/ActsToTracks_factory.h"
 #include "factories/tracking/ActsTrackMerger_factory.h"
 #include "factories/tracking/AmbiguitySolver_factory.h"
+#include "factories/tracking/B0TrackerActsSeeding_factory.h"
+#include "factories/tracking/B0TrackerStubSeeder_factory.h"
 #include "factories/tracking/CKFTracking_factory.h"
 #include "factories/tracking/IterativeVertexFinder_factory.h"
 #include "factories/tracking/SecondaryVertexFinder_factory.h"
@@ -374,15 +376,25 @@ void InitPlugin(JApplication* app) {
       },
       app));
 
-  app->Add(new JOmniFactoryGeneratorT<TrackSeeding_factory>(
-      "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
-      app));
+  // The dipole telescope needs a dedicated candidate finder. Re-estimate
+  // those candidates with ACTS on their first sensor, retaining all stations.
+  app->Add(new JOmniFactoryGeneratorT<B0TrackerStubSeeder_factory>(
+      "B0TrackerStubSeeds", {"B0TrackerRecHits"},
+      {"B0TrackerStubSeeds", "B0TrackerStubSeedParameters"}, {}, app));
+  app->Add(new JOmniFactoryGeneratorT<B0TrackerActsSeeding_factory>(
+      "B0TrackerSeeds", {"B0TrackerStubSeeds", "B0TrackerMeasurements"},
+      {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {}, app));
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTrajectories", {"B0TrackerSeeds", "B0TrackerMeasurements"},
       {
           "B0TrackerCKFActsTrackStatesUnfiltered",
           "B0TrackerCKFActsTracksUnfiltered",
+      },
+      {
+          // A B0 candidate can contain three distinct stations. Keep the
+          // upstream chi2 cutoff; compare any looser cut explicitly at runtime.
+          .numMeasurementsMin = 3,
       },
       app));
 
@@ -410,6 +422,9 @@ void InitPlugin(JApplication* app) {
       {
           "B0TrackerCKFActsTrackStates",
           "B0TrackerCKFActsTracks",
+      },
+      {
+          .n_measurements_min = 3,
       },
       app));
 

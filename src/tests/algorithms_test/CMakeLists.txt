@@ -19,6 +19,7 @@ add_executable(
   tracking_MPGDHitReconstruction.cc
   tracking_B0TrackerStubSeeder.cc
   tracking_ActsTrackParameterEstimation.cc
+  tracking_B0TrackerActsSeeding.cc
   digi_MPGDTrackerDigi.cc
   tracking_TrackSeeding.cc
   pid_MergeTracks.cc

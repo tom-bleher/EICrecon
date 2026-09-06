@@ -158,9 +158,26 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   }
 
   ActsExamples::TrackParametersContainer acts_init_trk_params;
-  for (const auto& track_seed : *init_trk_seeds) {
+  std::vector<std::size_t> input_seed_indices;
+  for (std::size_t iseed = 0; iseed < init_trk_seeds->size(); ++iseed) {
+    const auto track_seed = (*init_trk_seeds)[iseed];
 
     const auto& track_parameter = track_seed.getParams();
+
+    std::shared_ptr<const Acts::Surface> seed_surface;
+    if (track_parameter.getSurface() == 0) {
+      // Legacy seeds use bound coordinates on the origin perigee.
+      seed_surface = Acts::Surface::makeShared<const Acts::PerigeeSurface>(Acts::Vector3(0, 0, 0));
+    } else {
+      const auto* surface = m_geoSvc->trackingGeometry()->findSurface(
+          Acts::GeometryIdentifier{track_parameter.getSurface()});
+      if (surface == nullptr) {
+        warning("Skipping seed {}: surface geometry ID {} is not in the tracking geometry", iseed,
+                track_parameter.getSurface());
+        continue;
+      }
+      seed_surface = surface->getSharedPtr();
+    }
 
     Acts::BoundVector params;
     params(Acts::eBoundLoc0) =
@@ -185,11 +202,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       ++i;
     }
 
-    // Construct a perigee surface as the target surface
-    auto pSurface = Acts::Surface::makeShared<const Acts::PerigeeSurface>(Acts::Vector3(0, 0, 0));
-
     // Create parameters
-    acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
+    acts_init_trk_params.emplace_back(seed_surface, params, cov, Acts::ParticleHypothesis::pion());
+    input_seed_indices.push_back(iseed);
   }
 
   //// Construct a perigee surface as the target surface
@@ -260,13 +275,14 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   Acts::ProxyAccessor<unsigned int> seedNumber("seed");
 
   // Loop over seeds
-  for (std::size_t iseed = 0; iseed < acts_init_trk_params.size(); ++iseed) {
+  for (std::size_t iparam = 0; iparam < acts_init_trk_params.size(); ++iparam) {
+    const auto iseed = input_seed_indices[iparam];
 
     // Clear trackContainerTemp and trackStateContainerTemp
     acts_tracks_temp.clear();
 
     // Run track finding for this seed
-    auto result = (*m_trackFinderFunc)(acts_init_trk_params.at(iseed), options, acts_tracks_temp);
+    auto result = (*m_trackFinderFunc)(acts_init_trk_params.at(iparam), options, acts_tracks_temp);
 
     if (!result.ok()) {
       debug("Track finding failed for seed {} with error {}", iseed, result.error().message());
@@ -307,6 +323,7 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         continue;
       }
 
+      // Skipping an invalid surface must not shift the PODIO seed relation.
       seedNumber(track) = iseed;
 
       // Copy accepted track into main track container
