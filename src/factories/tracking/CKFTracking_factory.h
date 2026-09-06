@@ -42,6 +42,12 @@ private:
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
 
+  ParameterRef<std::size_t> m_numB0StationsMin{
+      this, "NumB0StationsMin", config().numB0StationsMin,
+      "Minimum distinct B0 stations with fitted measurements (0 disables)"};
+  ParameterRef<double> m_b0StationZGap{this, "B0StationZGap", config().b0StationZGap,
+                                       "Maximum ion-frame z gap within one B0 station [mm]"};
+
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
 public:

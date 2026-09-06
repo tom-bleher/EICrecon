@@ -324,6 +324,7 @@ void InitPlugin(JApplication* app) {
       },
       {
           .numMeasurementsMin = 3,
+          .numB0StationsMin   = 3,
       },
       app));
 
@@ -395,6 +396,7 @@ void InitPlugin(JApplication* app) {
           // A B0 candidate can contain three distinct stations. Keep the
           // upstream chi2 cutoff; compare any looser cut explicitly at runtime.
           .numMeasurementsMin = 3,
+          .numB0StationsMin   = 3,
       },
       app));
 
