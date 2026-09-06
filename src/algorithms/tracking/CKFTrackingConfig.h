@@ -13,5 +13,8 @@ struct CKFTrackingConfig {
   std::vector<std::size_t> numMeasurementsCutOff = {10};
 
   std::size_t numMeasurementsMin = 4;
+  // Disabled for central tracking; B0 requires independent physical stations.
+  std::size_t numB0StationsMin = 0;
+  double b0StationZGap         = 50.0; // mm in the ion frame, matching B0 stub seeding
 };
 } // namespace eicrecon

@@ -327,6 +327,7 @@ void InitPlugin(JApplication* app) {
           // the stub-seeded chain below.
           .chi2CutOff         = {50.},
           .numMeasurementsMin = 3,
+          .numB0StationsMin   = 3,
       },
       app));
 
@@ -402,6 +403,7 @@ void InitPlugin(JApplication* app) {
           // on a beam-gas or synchrotron background overlay.
           .chi2CutOff         = {50.},
           .numMeasurementsMin = 3,
+          .numB0StationsMin   = 3,
       },
       app));
 
