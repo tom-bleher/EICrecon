@@ -278,6 +278,27 @@ namespace b0stub {
     return corrected;
   }
 
+  StubFit fitWithNonBendCorrection(const std::vector<Point3>& pts, double fieldX, double qOverP,
+                                   double zReference) {
+    auto fit = fitStub(removeNonBendCurvature(pts, fieldX, qOverP, zReference));
+    if (!fit.covarianceValid || !std::isfinite(fieldX) || !std::isfinite(qOverP) ||
+        !std::isfinite(zReference)) {
+      return fit;
+    }
+    // The weighted line estimator is (D^T W D)^-1 D^T W y. Apply the same
+    // estimator to dy_i/d(q/p); the inverse normal matrix is covarianceY.
+    Eigen::Vector2d response = Eigen::Vector2d::Zero();
+    for (const auto& point : pts) {
+      const double dz         = point.z - zReference;
+      const double derivative = -0.5 * kBend * fieldX * dz * dz;
+      const double u          = (point.z - fit.zRef) / fit.zScale;
+      response += Eigen::Vector2d(1.0, u) * (derivative / point.varianceY);
+    }
+    Eigen::Map<Eigen::Vector2d>(fit.derivativeYQOverP.data()) =
+        Eigen::Map<const RowMajor2>(fit.covarianceY.data()) * response;
+    return fit;
+  }
+
   std::array<double, 3> scatteringCovarianceAdditions(double qOverP, double theta,
                                                       double scatteringScale,
                                                       double qOverPRelativeUncertainty) {
@@ -504,6 +525,13 @@ namespace {
     Eigen::Matrix2d yTransform;
     yTransform << 1.0, uEntrance, 0.0, 1.0 / nonBendFit.zScale;
     fitCovariance.block<2, 2>(3, 3) = yTransform * yCovariance * yTransform.transpose();
+
+    // Corrected y coordinates share the momentum inferred from x. Retain
+    // that dependence, including the induced x/tx-to-y/ty cross terms.
+    SeedMatrix correction = SeedMatrix::Identity();
+    correction.block<2, 1>(3, 2) =
+        yTransform * Eigen::Map<const Eigen::Vector2d>(nonBendFit.derivativeYQOverP.data());
+    fitCovariance = (correction * fitCovariance * correction.transpose()).eval();
 
     const EntranceFit nominal = entranceFit(bendFit, nonBendFit);
     const std::array<double, 5> values{nominal.x, nominal.tx, nominal.qOverP, nominal.y,
@@ -1003,9 +1031,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
 
     // Remove the quadrupole bending from the non-bend coordinates and refit
     // the line, so that it describes the field-free upstream trajectory.
-    const auto corrected =
-        b0stub::removeNonBendCurvature(points, fieldX, cand.bendFit.qOverP, zEntrance);
-    cand.fit = b0stub::fitStub(corrected);
+    cand.fit = b0stub::fitWithNonBendCorrection(points, fieldX, cand.bendFit.qOverP, zEntrance);
     if (!cand.fit.valid || cand.fit.rmsY > m_cfg.maxYResidual ||
         std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
       return false;

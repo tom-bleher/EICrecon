@@ -20,6 +20,7 @@ using eicrecon::b0stub::bendFitFromParabola;
 using eicrecon::b0stub::clusterStations;
 using eicrecon::b0stub::endpointCompatibility;
 using eicrecon::b0stub::fitStub;
+using eicrecon::b0stub::fitWithNonBendCorrection;
 using eicrecon::b0stub::groupHitsByStation;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
@@ -402,6 +403,70 @@ TEST_CASE("B0 bend-fit covariance propagates to correlated seed parameters",
   const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 5, 5>> solver(covariance);
   REQUIRE(solver.info() == Eigen::Success);
   CHECK(solver.eigenvalues().minCoeff() >= Approx(0.0).margin(1e-12));
+}
+
+TEST_CASE("B0 corrected fit covariance matches original hit perturbations",
+          "[B0TrackerStubSeeder]") {
+  constexpr double zEntrance = 5800.0;
+  constexpr double fieldY    = 1.184;
+  constexpr double kBend     = 2.998e-4;
+  using Matrix5              = Eigen::Matrix<double, 5, 5>;
+  using Vector5              = Eigen::Matrix<double, 5, 1>;
+  for (const int nHits : {3, 4}) {
+    for (const double fieldX : {-0.6, 0.0, 0.6}) {
+      for (const double qOverP : {-1.0 / 41.0, 1.0 / 41.0}) {
+        for (const bool constrained : {false, true}) {
+          CAPTURE(nHits, fieldX, qOverP, constrained);
+          std::vector<Point3> points;
+          for (int i = 0; i < nHits; ++i) {
+            const double z  = kOfficialStationZ.at(i);
+            const double dz = z - zEntrance;
+            points.push_back(
+                {-2.5 - 2.5 / zEntrance * dz - 0.5 * kBend * qOverP * fieldY * dz * dz,
+                 75.0 + 75.0 / zEntrance * dz + 0.5 * kBend * qOverP * fieldX * dz * dz, z,
+                 4.0e-4 * (i + 1), 4.0e-4 / (i + 1)});
+          }
+          const auto bend      = bendFitFromParabola(fitStub(points), fieldY, zEntrance);
+          const auto corrected = fitWithNonBendCorrection(points, fieldX, bend.qOverP, zEntrance);
+          REQUIRE(bend.covarianceValid);
+          REQUIRE(corrected.covarianceValid);
+          const auto flat = seedCovarianceFromFit(bend, corrected, -0.025, constrained);
+          const Matrix5 reported =
+              Eigen::Map<const Eigen::Matrix<double, 5, 5, Eigen::RowMajor>>(flat.data());
+          // Differentiate the complete estimator from original, independent
+          // sensor coordinates: each x perturbation must also redo the y correction.
+          const auto state = [&](const std::vector<Point3>& hits) {
+            const auto b          = bendFitFromParabola(fitStub(hits), fieldY, zEntrance);
+            const auto y          = fitWithNonBendCorrection(hits, fieldX, b.qOverP, zEntrance);
+            const auto parameters = seedParametersFromFit(b, y, -0.025, constrained);
+            return Vector5(Eigen::Map<const Vector5>(parameters.data()));
+          };
+          Matrix5 expected = Matrix5::Zero();
+          for (int i = 0; i < nHits; ++i) {
+            for (const bool xCoordinate : {false, true}) {
+              auto plus             = points;
+              auto minus            = points;
+              constexpr double step = 1.0e-4; // mm
+              (xCoordinate ? plus.at(i).x : plus.at(i).y) += step;
+              (xCoordinate ? minus.at(i).x : minus.at(i).y) -= step;
+              Vector5 difference       = state(plus) - state(minus);
+              difference(2)            = std::remainder(difference(2), 2.0 * std::acos(-1.0));
+              const Vector5 derivative = difference / (2.0 * step);
+              const double variance = xCoordinate ? points.at(i).varianceX : points.at(i).varianceY;
+              expected += variance * derivative * derivative.transpose();
+            }
+          }
+          for (int row = 0; row < 5; ++row) {
+            for (int col = 0; col < 5; ++col) {
+              const double scale = std::sqrt(expected(row, row) * expected(col, col));
+              CHECK(reported(row, col) ==
+                    Approx(expected(row, col)).margin(2.0e-5 * scale + 1.0e-15));
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST_CASE("B0 beam spot preserves missing measurement covariance fallbacks",

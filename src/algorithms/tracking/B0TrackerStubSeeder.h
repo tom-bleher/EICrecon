@@ -56,6 +56,9 @@ namespace b0stub {
     std::array<double, 2> basisY{};
     std::array<double, 9> covarianceX{};
     std::array<double, 4> covarianceY{};
+    /// Response of basisY to the q/p used to remove non-bend curvature.
+    /// covarianceY remains the conditional covariance at fixed q/p.
+    std::array<double, 2> derivativeYQOverP{};
     bool covarianceValid{false};
     bool valid{false};
 
@@ -110,6 +113,11 @@ namespace b0stub {
   /// line describes the field-free upstream trajectory.
   std::vector<Point3> removeNonBendCurvature(const std::vector<Point3>& pts, double fieldX,
                                              double qOverP, double zReference);
+
+  /// Fit the corrected coordinates, retaining their shared dependence on q/p
+  /// for joint bend/non-bend covariance propagation (field held fixed).
+  StubFit fitWithNonBendCorrection(const std::vector<Point3>& pts, double fieldX, double qOverP,
+                                   double zReference);
 
   /// Diagonal (phi, theta, q/p) variance additions for multiple scattering
   /// and the trajectory model, both scaling with |q/p|.
