@@ -78,6 +78,12 @@ private:
                                        "fallback seed q/p variance"};
   ParameterRef<float> m_timeVariance{this, "timeVariance", config().timeVariance,
                                      "seed time variance [ns^2]"};
+  ParameterRef<float> m_beamSpotSizeX{this, "beamSpotSizeX", config().beamSpotSizeX,
+                                      "interaction-vertex sigma along lab x [mm]"};
+  ParameterRef<float> m_beamSpotSizeY{this, "beamSpotSizeY", config().beamSpotSizeY,
+                                      "interaction-vertex sigma along lab y [mm]"};
+  ParameterRef<float> m_beamSpotSizeZ{this, "beamSpotSizeZ", config().beamSpotSizeZ,
+                                      "interaction-vertex sigma along lab z [mm]"};
   ParameterRef<float> m_scatteringScale{
       this, "scatteringScale", config().scatteringScale,
       "scattering angle coefficient [GeV rad], sigma=scale*|q/p|"};

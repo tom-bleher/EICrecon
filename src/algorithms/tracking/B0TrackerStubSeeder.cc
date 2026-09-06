@@ -438,17 +438,43 @@ namespace {
             .ty     = nonBendFit.basisY[1] / nonBendFit.zScale};
   }
 
-  SeedVector seedStateFromEntrance(const EntranceFit& entrance, double zFieldEntrance,
-                                   double crossingAngle, bool constrainToBeamline) {
+  /// Beamline-constrained seed state for a track that starts at `vertex`
+  /// (lab frame, mm) and passes through the field-entrance point. A zero
+  /// vertex is the shipped constrained mode; the vertex is varied only to
+  /// derive the beam-spot covariance.
+  SeedVector seedStateFromVertex(const EntranceFit& entrance, double zFieldEntrance,
+                                 double crossingAngle, const b0stub::Point3& vertex) {
     const double ca = std::cos(crossingAngle);
     const double sa = std::sin(crossingAngle);
 
-    const double txi = constrainToBeamline ? entrance.x / zFieldEntrance : entrance.tx;
-    const double tyi = constrainToBeamline ? entrance.y / zFieldEntrance : entrance.ty;
-    const double x0  = constrainToBeamline ? 0.0 : entrance.x - entrance.tx * zFieldEntrance;
-    const double y0  = constrainToBeamline ? 0.0 : entrance.y - entrance.ty * zFieldEntrance;
+    // Field-entrance point in the lab frame: the ion-frame point
+    // (entrance.x, entrance.y, zFieldEntrance) rotated by the crossing angle.
+    const b0stub::Point3 point{.x = entrance.x * ca + zFieldEntrance * sa,
+                               .y = entrance.y,
+                               .z = -entrance.x * sa + zFieldEntrance * ca};
+    const b0stub::Point3 dir{
+        .x = point.x - vertex.x, .y = point.y - vertex.y, .z = point.z - vertex.z};
+    const auto perigee = b0stub::perigeeFromRay(vertex, dir, {.x = 0.0, .y = 0.0, .z = 0.0});
 
-    const b0stub::Point3 dir{.x = txi * ca + sa, .y = tyi, .z = -txi * sa + ca};
+    SeedVector state;
+    state << perigee.loc0, perigee.loc1, perigee.phi, perigee.theta, entrance.qOverP;
+    return state;
+  }
+
+  SeedVector seedStateFromEntrance(const EntranceFit& entrance, double zFieldEntrance,
+                                   double crossingAngle, bool constrainToBeamline) {
+    if (constrainToBeamline) {
+      return seedStateFromVertex(entrance, zFieldEntrance, crossingAngle,
+                                 {.x = 0.0, .y = 0.0, .z = 0.0});
+    }
+    const double ca = std::cos(crossingAngle);
+    const double sa = std::sin(crossingAngle);
+
+    const double x0 = entrance.x - entrance.tx * zFieldEntrance;
+    const double y0 = entrance.y - entrance.ty * zFieldEntrance;
+
+    const b0stub::Point3 dir{
+        .x = entrance.tx * ca + sa, .y = entrance.ty, .z = -entrance.tx * sa + ca};
     const b0stub::Point3 ref{.x = x0 * ca, .y = y0, .z = -x0 * sa};
     const auto perigee = b0stub::perigeeFromRay(ref, dir, {.x = 0.0, .y = 0.0, .z = 0.0});
 
@@ -546,6 +572,47 @@ namespace b0stub {
     const SeedMatrix covariance =
         propagateFitCovariance(bendFit, nonBendFit, crossingAngle, constrainToBeamline);
     std::array<double, 25> result{};
+    Eigen::Map<RowMajor5>(result.data()) = covariance;
+    return result;
+  }
+
+  std::array<double, 25> beamSpotCovarianceAdditions(const BendFit& bendFit,
+                                                     const StubFit& nonBendFit,
+                                                     double crossingAngle, bool constrainToBeamline,
+                                                     double sigmaX, double sigmaY, double sigmaZ) {
+    std::array<double, 25> result{};
+    if (!constrainToBeamline) {
+      return result;
+    }
+    const EntranceFit entrance = entranceFit(bendFit, nonBendFit);
+    const std::array<double, 3> sigmas{sigmaX, sigmaY, sigmaZ};
+    SeedMatrix covariance = SeedMatrix::Zero();
+    for (std::size_t axis = 0; axis < sigmas.size(); ++axis) {
+      const double sigma = sigmas.at(axis);
+      if (!(sigma > 0.0) || !std::isfinite(sigma)) {
+        continue;
+      }
+      Point3 plus{};
+      Point3 minus{};
+      // One displacement of +-1 sigma along each lab axis in turn. The map is
+      // linear to well within the beam-spot size, so the half-difference is
+      // the column of the Jacobian already scaled by sigma.
+      std::array<double*, 3> plusAxes{&plus.x, &plus.y, &plus.z};
+      std::array<double*, 3> minusAxes{&minus.x, &minus.y, &minus.z};
+      *plusAxes.at(axis)  = sigma;
+      *minusAxes.at(axis) = -sigma;
+      const SeedVector upper =
+          seedStateFromVertex(entrance, bendFit.zReference, crossingAngle, plus);
+      const SeedVector lower =
+          seedStateFromVertex(entrance, bendFit.zReference, crossingAngle, minus);
+      SeedVector shift = 0.5 * (upper - lower);
+      shift(2)         = 0.5 * std::remainder(upper(2) - lower(2), 2.0 * std::acos(-1.0));
+      shift(4)         = 0.0; // q/p comes from the curvature, not from the vertex
+      covariance += shift * shift.transpose();
+    }
+    if (!covariance.allFinite()) {
+      return {};
+    }
     Eigen::Map<RowMajor5>(result.data()) = covariance;
     return result;
   }
@@ -1159,6 +1226,13 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       SeedMatrix covariance      = fitCovariance;
       covariance.row(4) *= qOverPSign;
       covariance.col(4) *= qOverPSign;
+
+      // The constrained seed assumes the origin; the interaction-vertex
+      // spread is an uncertainty on the parameters it reports.
+      const auto beamSpot = b0stub::beamSpotCovarianceAdditions(
+          cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline,
+          m_cfg.beamSpotSizeX, m_cfg.beamSpotSizeY, m_cfg.beamSpotSizeZ);
+      covariance += Eigen::Map<const RowMajor5>(beamSpot.data());
 
       const std::array<double, 5> fallbackVariances{m_cfg.locaVariance, m_cfg.locbVariance,
                                                     m_cfg.phiVariance, m_cfg.thetaVariance,

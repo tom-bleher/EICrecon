@@ -92,12 +92,28 @@ struct B0TrackerStubSeederConfig {
   /// CKFTracking does not yet support.
   bool constrainToBeamline = true;
 
+  // --- interaction-vertex spread ---
+  // Gaussian sigma of the interaction vertex in the lab frame [mm]. The
+  // beamline-constrained seed reports the parameters of a track leaving the
+  // origin, so the spread of the true vertex is an uncertainty on those
+  // parameters, and the longitudinal term dominates the polar angle:
+  // sigma(theta) = theta * sigmaZ / 6 m, about 180 urad for a 30 mrad track
+  // and a 37 mm bunch, against 13 urad from the hit resolution.
+  // The defaults are the vertex distribution of the afterburned 5x41 DVCS
+  // sample (RMS 0.168, 0.019, 37.2 mm; the crossing angle leaves it diagonal
+  // in the lab frame to better than 0.07 in correlation). Beam settings
+  // change them. Set all three to zero for a gun thrown from a fixed point.
+  float beamSpotSizeX = 0.17;
+  float beamSpotSizeY = 0.02;
+  float beamSpotSizeZ = 37.0;
+
   // --- covariance fallbacks (diagonal variances, edm4eic units: mm^2,
   // rad^2, (1/GeV)^2, ns^2) ---
   // The fitted hit covariance is propagated to loc/angles/q/p, including
-  // correlations. These values are used only for parameters that the fit does
-  // not constrain (notably loc0/loc1 in beamline-constrained mode), or when
-  // input hit variances are unavailable.
+  // correlations, and the vertex spread above is added. These values are used
+  // only for parameters that neither constrains, or when input hit variances
+  // are unavailable; with a non-zero beam spot that no longer includes
+  // loc0/loc1 in beamline-constrained mode.
   float locaVariance   = 4.0;
   float locbVariance   = 1600.0;
   float phiVariance    = 0.01;

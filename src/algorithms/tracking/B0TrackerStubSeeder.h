@@ -127,6 +127,23 @@ namespace b0stub {
   std::array<double, 25> seedCovarianceFromFit(const BendFit& bendFit, const StubFit& nonBendFit,
                                                double crossingAngle, bool constrainToBeamline);
 
+  /// Seed covariance contribution of the interaction-vertex spread, as a
+  /// row-major 5x5 matrix, for the beamline-constrained mode only.
+  ///
+  /// That mode reports the parameters of a track leaving the origin. A vertex
+  /// displaced by v gives different parameters, above all a different polar
+  /// angle: theta moves by about theta * v_z / L over the lever arm L of 6 m
+  /// to the B0pf entrance, which is two orders of magnitude larger than the
+  /// hit-resolution term for a bunch tens of mm long. Returns
+  /// J diag(sigma^2) J^T with J the derivative of the seed state with respect
+  /// to the lab-frame vertex, so the loc0-phi and loc1-theta correlations the
+  /// spread induces are carried too. Zero in the unconstrained mode, where the
+  /// direction is measured from the stub and the vertex never enters.
+  std::array<double, 25> beamSpotCovarianceAdditions(const BendFit& bendFit,
+                                                     const StubFit& nonBendFit,
+                                                     double crossingAngle, bool constrainToBeamline,
+                                                     double sigmaX, double sigmaY, double sigmaZ);
+
   /// Perigee parameters of the straight ray leaving `ref` along `dir`, expressed
   /// on a perigee surface centred at `perigee`. All positions in mm.
   struct PerigeeParams {

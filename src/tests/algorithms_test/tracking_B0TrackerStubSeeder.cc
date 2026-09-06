@@ -14,6 +14,7 @@
 
 using Catch::Approx;
 using eicrecon::b0stub::assignStation;
+using eicrecon::b0stub::beamSpotCovarianceAdditions;
 using eicrecon::b0stub::BendFit;
 using eicrecon::b0stub::bendFitFromParabola;
 using eicrecon::b0stub::clusterStations;
@@ -534,4 +535,75 @@ TEST_CASE("B0 charge hypotheses cover the unresolved-curvature limit", "[B0Track
     REQUIRE(chargeHypotheses(0.1, 1.0e-9, minSignificance, +1, true, -1) ==
             std::vector<int>{-1, 1});
   }
+}
+
+TEST_CASE("B0 beam-spot covariance is dominated by the longitudinal term",
+          "[B0TrackerStubSeeder]") {
+  constexpr double kBend = 2.998e-4;
+  const double zEntrance = 5800.0;
+  const double fieldY    = 1.184;
+  const double qOverP    = 1.0 / 41.0;
+  std::vector<Point3> points;
+  for (double z : kOfficialStationZ) {
+    const double dz = z - zEntrance;
+    points.push_back({.x         = -2.5 - 1.0e-3 * dz - 0.5 * kBend * qOverP * fieldY * dz * dz,
+                      .y         = -1.5 + 2.0e-3 * z,
+                      .z         = z,
+                      .varianceX = 4.0e-4,
+                      .varianceY = 4.0e-4});
+  }
+  const StubFit nonBendFit = fitStub(points);
+  const BendFit bendFit    = bendFitFromParabola(nonBendFit, fieldY, zEntrance);
+  REQUIRE(bendFit.covarianceValid);
+  const double theta = seedParametersFromFit(bendFit, nonBendFit, -0.025, true)[3];
+
+  const auto zero = beamSpotCovarianceAdditions(bendFit, nonBendFit, -0.025, true, 0.0, 0.0, 0.0);
+  CHECK(std::ranges::all_of(zero, [](double v) { return v == 0.0; }));
+
+  // The unconstrained seed measures the direction; the vertex never enters.
+  const auto unconstrained =
+      beamSpotCovarianceAdditions(bendFit, nonBendFit, -0.025, false, 0.17, 0.02, 37.0);
+  CHECK(std::ranges::all_of(unconstrained, [](double v) { return v == 0.0; }));
+
+  // A purely longitudinal spread: theta scales with the lever arm, loc1 is the
+  // displacement itself, and the two are perfectly correlated because one
+  // variate drives both.
+  const double sigmaZ = 37.0;
+  const auto longitudinal =
+      beamSpotCovarianceAdditions(bendFit, nonBendFit, -0.025, true, 0.0, 0.0, sigmaZ);
+  const double sigmaTheta = std::sqrt(longitudinal.at(5 * 3 + 3));
+  const double sigmaLoc1  = std::sqrt(longitudinal.at(5 * 1 + 1));
+  CHECK(sigmaTheta == Approx(theta * sigmaZ / zEntrance).epsilon(0.05));
+  CHECK(sigmaLoc1 == Approx(sigmaZ).epsilon(0.05));
+  CHECK(std::abs(longitudinal.at(5 * 1 + 3)) == Approx(sigmaLoc1 * sigmaTheta).epsilon(1e-6));
+  CHECK(longitudinal.at(5 * 0 + 0) < 1.0e-12);
+  CHECK(longitudinal.at(5 * 2 + 2) < 1.0e-12);
+
+  // A transverse spread moves the impact parameter and the azimuth instead.
+  const auto transverse =
+      beamSpotCovarianceAdditions(bendFit, nonBendFit, -0.025, true, 0.17, 0.02, 0.0);
+  CHECK(std::sqrt(transverse.at(0)) > 0.5 * 0.02);
+  CHECK(std::sqrt(transverse.at(0)) < 2.0 * 0.17);
+  CHECK(transverse.at(5 * 2 + 2) > 0.0);
+  CHECK(transverse.at(5 * 3 + 3) < longitudinal.at(5 * 3 + 3));
+
+  // Quadratic in the sizes, symmetric, positive semi-definite, and q/p free.
+  const auto doubled =
+      beamSpotCovarianceAdditions(bendFit, nonBendFit, -0.025, true, 0.34, 0.04, 74.0);
+  Eigen::Matrix<double, 5, 5> matrix;
+  for (int row = 0; row < 5; ++row) {
+    for (int col = 0; col < 5; ++col) {
+      matrix(row, col) = doubled.at(5 * row + col);
+      CHECK(doubled.at(5 * row + col) == Approx(doubled.at(5 * col + row)).margin(1e-15));
+      CHECK(doubled.at(5 * row + col) ==
+            Approx(4.0 * (longitudinal.at(5 * row + col) + transverse.at(5 * row + col)))
+                .epsilon(0.02)
+                .margin(1e-15));
+    }
+    CHECK(doubled.at(5 * row + 4) == 0.0);
+    CHECK(doubled.at(5 * 4 + row) == 0.0);
+  }
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 5, 5>> solver(matrix);
+  REQUIRE(solver.info() == Eigen::Success);
+  CHECK(solver.eigenvalues().minCoeff() >= Approx(0.0).margin(1e-12));
 }
