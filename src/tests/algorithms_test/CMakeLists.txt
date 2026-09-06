@@ -20,6 +20,7 @@ add_executable(
   tracking_B0TrackerStubSeeder.cc
   tracking_B0TrackStationSelector.cc
   digi_MPGDTrackerDigi.cc
+  digi_SiliconTrackerDigi.cc
   tracking_TrackSeeding.cc
   pid_MergeTracks.cc
   particle_ChargedCandidateMaker.cc
