@@ -127,6 +127,14 @@ namespace b0stub {
   std::array<double, 25> seedCovarianceFromFit(const BendFit& bendFit, const StubFit& nonBendFit,
                                                double crossingAngle, bool constrainToBeamline);
 
+  /// Combine row-major fit and beam-spot covariances. Missing fit angular or
+  /// momentum variances require fallbacks even if the beam spot contributes;
+  /// position fallbacks are needed only when neither source constrains them.
+  std::array<double, 25>
+  seedCovarianceWithFallbacks(const std::array<double, 25>& fitCovariance,
+                              const std::array<double, 25>& beamSpotCovariance,
+                              const std::array<double, 5>& fallbackVariances);
+
   /// Seed covariance contribution of the interaction-vertex spread, as a
   /// row-major 5x5 matrix, for the beamline-constrained mode only.
   ///

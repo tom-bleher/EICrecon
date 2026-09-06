@@ -26,6 +26,7 @@ using eicrecon::b0stub::Point3;
 using eicrecon::b0stub::removeNonBendCurvature;
 using eicrecon::b0stub::scatteringCovarianceAdditions;
 using eicrecon::b0stub::seedCovarianceFromFit;
+using eicrecon::b0stub::seedCovarianceWithFallbacks;
 using eicrecon::b0stub::seedParametersFromFit;
 using eicrecon::b0stub::StubFit;
 
@@ -401,6 +402,54 @@ TEST_CASE("B0 bend-fit covariance propagates to correlated seed parameters",
   const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 5, 5>> solver(covariance);
   REQUIRE(solver.info() == Eigen::Success);
   CHECK(solver.eigenvalues().minCoeff() >= Approx(0.0).margin(1e-12));
+}
+
+TEST_CASE("B0 beam spot preserves missing measurement covariance fallbacks",
+          "[B0TrackerStubSeeder]") {
+  auto points              = sampleTrack(12.5, -3.0e-3, -4.0e-6, -1.5, 2.0e-3, 4.0e-4, 4.0e-4);
+  bool haveVariances       = true;
+  bool constrainToBeamline = true;
+  double beamSize          = 1.0;
+  SECTION("valid measurement covariance is unchanged") {}
+  SECTION("missing hit variances retain angular fallbacks and beam correlations") {
+    haveVariances = false;
+  }
+  SECTION("a fixed vertex retains the location fallbacks") { beamSize = 0.0; }
+  SECTION("unconstrained seeds with missing variances retain all fallbacks") {
+    haveVariances       = false;
+    constrainToBeamline = false;
+  }
+  if (!haveVariances) {
+    for (auto& point : points) {
+      point.varianceX = 0.0;
+      point.varianceY = 0.0;
+    }
+  }
+  const auto fit  = fitStub(points);
+  const auto bend = bendFitFromParabola(fit, 1.184, 5800.0);
+  REQUIRE(fit.valid);
+  REQUIRE(bend.valid);
+  REQUIRE(fit.covarianceValid == haveVariances);
+  REQUIRE(bend.covarianceValid == haveVariances);
+  const auto measurement = seedCovarianceFromFit(bend, fit, -0.025, constrainToBeamline);
+  const auto beam = beamSpotCovarianceAdditions(bend, fit, -0.025, constrainToBeamline,
+                                                beamSize * 0.17, beamSize * 0.02, beamSize * 37.0);
+  const std::array<double, 5> fallback{4.0, 1600.0, 0.01, 1.0e-5, 2.0e-4};
+  const auto combined = seedCovarianceWithFallbacks(measurement, beam, fallback);
+  for (int row = 0; row < 5; ++row) {
+    for (int col = 0; col < 5; ++col) {
+      const auto index = 5 * row + col;
+      double expected  = measurement.at(index) + beam.at(index);
+      if (row == col) {
+        if (row >= 2 && !haveVariances) {
+          expected += fallback.at(row);
+        } else if (expected == 0.0) {
+          expected = fallback.at(row);
+        }
+      }
+      CHECK(combined.at(index) == Approx(expected).margin(1e-15));
+    }
+  }
 }
 
 TEST_CASE("B0 perigee parameters of a ray through the origin", "[B0TrackerStubSeeder]") {

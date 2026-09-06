@@ -576,6 +576,32 @@ namespace b0stub {
     return result;
   }
 
+  std::array<double, 25>
+  seedCovarianceWithFallbacks(const std::array<double, 25>& fitCovariance,
+                              const std::array<double, 25>& beamSpotCovariance,
+                              const std::array<double, 5>& fallbackVariances) {
+    SeedMatrix covariance    = Eigen::Map<const RowMajor5>(fitCovariance.data());
+    const auto applyFallback = [&](int i) {
+      if (!std::isfinite(covariance(i, i)) || covariance(i, i) <= 0.0) {
+        covariance.row(i).setZero();
+        covariance.col(i).setZero();
+        covariance(i, i) = fallbackVariances.at(i);
+      }
+    };
+    // Vertex uncertainty cannot replace missing measurement uncertainty on
+    // the direction or momentum. Preserve it in addition to these fallbacks.
+    for (int i = 2; i < 5; ++i) {
+      applyFallback(i);
+    }
+    covariance += Eigen::Map<const RowMajor5>(beamSpotCovariance.data());
+    for (int i = 0; i < 5; ++i) {
+      applyFallback(i);
+    }
+    std::array<double, 25> result{};
+    Eigen::Map<RowMajor5>(result.data()) = covariance;
+    return result;
+  }
+
   std::array<double, 25> beamSpotCovarianceAdditions(const BendFit& bendFit,
                                                      const StubFit& nonBendFit,
                                                      double crossingAngle, bool constrainToBeamline,
@@ -1232,18 +1258,14 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       const auto beamSpot = b0stub::beamSpotCovarianceAdditions(
           cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline,
           m_cfg.beamSpotSizeX, m_cfg.beamSpotSizeY, m_cfg.beamSpotSizeZ);
-      covariance += Eigen::Map<const RowMajor5>(beamSpot.data());
-
       const std::array<double, 5> fallbackVariances{m_cfg.locaVariance, m_cfg.locbVariance,
                                                     m_cfg.phiVariance, m_cfg.thetaVariance,
                                                     m_cfg.qOverPVariance};
-      for (int i = 0; i < 5; ++i) {
-        if (!std::isfinite(covariance(i, i)) || covariance(i, i) <= 0.0) {
-          covariance.row(i).setZero();
-          covariance.col(i).setZero();
-          covariance(i, i) = fallbackVariances.at(i);
-        }
-      }
+      std::array<double, 25> signedFitCovariance{};
+      Eigen::Map<RowMajor5>(signedFitCovariance.data()) = covariance;
+      const auto combined =
+          b0stub::seedCovarianceWithFallbacks(signedFitCovariance, beamSpot, fallbackVariances);
+      covariance            = Eigen::Map<const RowMajor5>(combined.data());
       const auto scattering = b0stub::scatteringCovarianceAdditions(
           emittedQOverP, state(3), m_cfg.scatteringScale, m_cfg.qOverPRelativeUncertainty);
       covariance(2, 2) += scattering[0];
