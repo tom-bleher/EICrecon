@@ -129,7 +129,41 @@ private:
   std::string m_outputTag{""};
   std::string m_outputDir{""};
 
+  /// Layer envelopes [mm] added around each layer when converting DD4hep
+  /// volumes to ACTS tracking layers.
+  ///
+  /// These are not per-layer envelopes. convertDD4hepDetector forwards them to
+  /// CylinderVolumeBuilder, which pads the r and z bounds of every subdetector
+  /// tracking VOLUME beyond its outermost layers; the bounds are computed from
+  /// the layer's global centre and its local thickness, i.e. as if the layer
+  /// were perpendicular to z. Per-layer envelopes come from the DD4hep
+  /// envelope_r/z_min/max parameters and are unaffected.
+  ///
+  /// A disc layer tilted with respect to the beam axis -- the B0 tracker
+  /// follows the outgoing ion direction, 25 mrad off z -- extends
+  /// x_local*sin(alpha) in global z beyond that untilted estimate, up to
+  /// ~4 mm at its outer edge. With a 1 mm pad the tilted approach face of the
+  /// first B0 layer sat behind the volume entry point; ACTS never targets a
+  /// surface behind the current position, so those sensors were skipped with
+  /// neither a measurement nor a hole. 5 mm covers the B0 tilt with margin
+  /// (the gain saturates at 3 mm): on a 41 GeV proton gun the mean number of
+  /// measurements per B0 track rises from 3.40 to 3.63 and the fraction of
+  /// four-station tracks from 40 % to 63 %. Central tracking is unchanged.
+  ///
+  /// Constraint: z-attached volumes must not overlap after padding
+  /// (CylinderVolumeBuilder requires zMin > the previous volume's zMax), so
+  /// the pad has to stay below half the z gap between neighbouring tracking
+  /// volumes; otherwise geometry conversion fails with "Misconfiguration in
+  /// volume building".
+  double m_layerEnvelopeR{1.0};
+  double m_layerEnvelopeZ{5.0};
+
 public:
+  void setLayerEnvelopeR(double envelope) { m_layerEnvelopeR = envelope; }
+  double getLayerEnvelopeR() const { return m_layerEnvelopeR; }
+  void setLayerEnvelopeZ(double envelope) { m_layerEnvelopeZ = envelope; }
+  double getLayerEnvelopeZ() const { return m_layerEnvelopeZ; }
+
   void setObjWriteIt(bool writeit) { m_objWriteIt = writeit; }
   bool getObjWriteIt() const { return m_objWriteIt; }
   void setPlyWriteIt(bool writeit) { m_plyWriteIt = writeit; }
