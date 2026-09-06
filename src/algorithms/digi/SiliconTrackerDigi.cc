@@ -88,6 +88,10 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
     auto raw_hit = raw_hits->at(raw_hits->size() - 1);
 
     for (const auto& sim_hit : *sim_hits) {
+      // Only deposits included in the raw charge may contribute truth links.
+      if (sim_hit.getEDep() < m_cfg.threshold) {
+        continue;
+      }
       if (item.first == sim_hit.getCellID()) {
         // create link
         auto link = links->create();
