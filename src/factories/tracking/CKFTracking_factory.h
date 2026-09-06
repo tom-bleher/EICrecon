@@ -38,6 +38,10 @@ private:
   ParameterRef<std::vector<std::size_t>> m_numMeasurementsCutOff{
       this, "NumMeasurementsCutOff", config().numMeasurementsCutOff,
       "Number of measurements Cut Off for ACTS CKF tracking"};
+  ParameterRef<int> m_particleHypothesisPdg{this, "ParticleHypothesisPdg",
+                                            config().particleHypothesisPdg,
+                                            "Absolute fit-hypothesis PDG: 11, 13, 211 (default), "
+                                            "321, 2212; charge sign from seed q/p, not PID"};
   ParameterRef<std::size_t> m_numMeasurementsMin{
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
@@ -51,6 +55,16 @@ private:
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
 public:
+  void PreInit(std::string tag, std::vector<std::string> inputTags,
+               std::vector<std::string> outputTags) {
+    JOmniFactory::PreInit(std::move(tag), std::move(inputTags), std::move(outputTags));
+    // Fail during factory generation: PODIO output can swallow lazy Init exceptions.
+    GetApplication()->SetDefaultParameter(GetPrefix() + ":" + m_particleHypothesisPdg.m_name,
+                                          config().particleHypothesisPdg,
+                                          m_particleHypothesisPdg.m_description);
+    AlgoT::makeParticleHypothesis(config().particleHypothesisPdg);
+  }
+
   void Configure() {
     m_algo = std::make_unique<AlgoT>(this->GetPrefix());
     m_algo->level(static_cast<algorithms::LogLevel>(logger()->level()));

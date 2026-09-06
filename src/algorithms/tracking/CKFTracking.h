@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/VectorMultiTrajectory.hpp>
 #include <Acts/EventData/VectorTrackContainer.hpp>
 #include <Acts/Geometry/TrackingGeometry.hpp>
@@ -71,6 +72,9 @@ public:
                              {"outputActsTrackStates", "outputActsTracks"},
                              "Combinatorial Kalman Filter track finding"} {}
 
+  /// Validate the configured absolute PDG; the seed q/p determines the charge sign.
+  static Acts::ParticleHypothesis makeParticleHypothesis(int absolutePdg);
+
   void init() final;
   void process(const Input&, const Output&) const final;
 
@@ -81,6 +85,7 @@ private:
       algorithms::ActsSvc::instance().acts_geometry_provider()};
   std::shared_ptr<const Acts::MagneticFieldProvider> m_BField{m_geoSvc->getFieldProvider()};
 
+  Acts::ParticleHypothesis m_particleHypothesis = Acts::ParticleHypothesis::pion();
   Acts::MeasurementSelector::Config m_sourcelinkSelectorCfg;
   B0SurfaceStationMap m_b0SurfaceStations;
 

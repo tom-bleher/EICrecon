@@ -133,7 +133,27 @@ namespace eicrecon {
 
 using namespace Acts::UnitLiterals;
 
+Acts::ParticleHypothesis CKFTracking::makeParticleHypothesis(int absolutePdg) {
+  switch (absolutePdg) {
+  case 11:
+    return Acts::ParticleHypothesis::electron();
+  case 13:
+    return Acts::ParticleHypothesis::muon();
+  case 211:
+    return Acts::ParticleHypothesis::pion();
+  case 321:
+    return Acts::ParticleHypothesis::kaon();
+  case 2212:
+    return Acts::ParticleHypothesis::proton();
+  default:
+    throw std::invalid_argument("ParticleHypothesisPdg must be one of the positive absolute PDGs "
+                                "11, 13, 211, 321, 2212; got " +
+                                std::to_string(absolutePdg));
+  }
+}
+
 void CKFTracking::init() {
+  m_particleHypothesis = makeParticleHypothesis(m_cfg.particleHypothesisPdg);
   m_acts_logger = Acts::getDefaultLogger(
       "CKF", eicrecon::SpdlogToActsLevel(static_cast<spdlog::level::level_enum>(this->level())));
 
@@ -214,7 +234,7 @@ void CKFTracking::process(const Input& input, const Output& output) const {
     auto pSurface = Acts::Surface::makeShared<const Acts::PerigeeSurface>(Acts::Vector3(0, 0, 0));
 
     // Create parameters
-    acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
+    acts_init_trk_params.emplace_back(pSurface, params, cov, m_particleHypothesis);
   }
 
   //// Construct a perigee surface as the target surface
