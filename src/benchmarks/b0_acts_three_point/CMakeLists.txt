@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(acts_trial LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+find_package(Acts REQUIRED COMPONENTS Core PluginDD4hep)
+find_package(DD4hep REQUIRED COMPONENTS DDCore)
+add_executable(trial trial.cpp)
+target_link_libraries(trial PRIVATE Acts::Core Acts::PluginDD4hep DD4hep::DDCore)
