@@ -7,6 +7,7 @@
 #include <Acts/Surfaces/PlaneSurface.hpp>
 #include <Eigen/Cholesky>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <random>
 #include <vector>
@@ -14,11 +15,7 @@
 #include "algorithms/tracking/B0TrackerActsSeeding.h"
 
 namespace {
-#if Acts_VERSION_MAJOR >= 45
 const auto geometryContext = Acts::GeometryContext::dangerouslyDefaultConstruct();
-#else
-const Acts::GeometryContext geometryContext;
-#endif
 
 struct HelixMeasurements {
   std::vector<std::shared_ptr<Acts::PlaneSurface>> surfaces;
@@ -151,6 +148,15 @@ TEST_CASE("B0 multipoint estimates reject malformed geometry and covariance",
   bad.front().surface = nullptr;
   CHECK_FALSE(eicrecon::b0acts::estimateParameters(bad, geometryContext, sample.field));
   CHECK_FALSE(eicrecon::b0acts::estimateWithCovariance(bad, geometryContext, sample.field));
+  bad                   = sample.measurements;
+  bad.front().local.x() = std::numeric_limits<double>::quiet_NaN();
+  CHECK_FALSE(eicrecon::b0acts::estimateParameters(bad, geometryContext, sample.field));
+  Acts::Transform3 invalidTransform  = Acts::Transform3::Identity();
+  invalidTransform.translation().x() = std::numeric_limits<double>::quiet_NaN();
+  const auto invalidSurface = Acts::Surface::makeShared<Acts::PlaneSurface>(invalidTransform);
+  bad                       = sample.measurements;
+  bad.front().surface       = invalidSurface.get();
+  CHECK_FALSE(eicrecon::b0acts::estimateParameters(bad, geometryContext, sample.field));
   CHECK_FALSE(eicrecon::b0acts::estimateParameters(sample.measurements, geometryContext,
                                                    Acts::Vector3::Zero()));
   bad = {sample.measurements.front(), sample.measurements.front(), sample.measurements.front()};

@@ -6,6 +6,7 @@
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/Geometry/GeometryIdentifier.hpp>
+#include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
 #include <Evaluator/DD4hepUnits.h>
 #include <Eigen/Cholesky>
 #include <algorithm>
@@ -18,7 +19,6 @@
 #include <utility>
 
 #include "algorithms/interfaces/ActsSvc.h"
-#include "algorithms/tracking/ActsTrackParameterEstimation.h"
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
 
 namespace eicrecon {
@@ -36,11 +36,15 @@ namespace b0acts {
       if (measurement.surface == nullptr || !measurement.local.allFinite()) {
         return std::nullopt;
       }
-      positions.push_back(
-          measurement.surface->localToGlobal(gctx, measurement.local, Acts::Vector3::UnitZ()));
+      const auto position =
+          measurement.surface->localToGlobal(gctx, measurement.local, Acts::Vector3::UnitZ());
+      if (!position.allFinite()) {
+        return std::nullopt;
+      }
+      positions.push_back(position);
     }
-    const auto free = acts_compat::estimateTrackParamsFromSpacePoints(positions, field);
-    if (!free || !free->allFinite()) {
+    const auto free = Acts::estimateTrackParamsFromSpacePoints(positions, field);
+    if (!free.ok() || !free->allFinite()) {
       return std::nullopt;
     }
     const Acts::Vector3 direction = free->segment<3>(Acts::eFreeDir0);
@@ -119,22 +123,8 @@ void B0TrackerActsSeeding::init() {
 void B0TrackerActsSeeding::process(const Input& input, const Output& output) const {
   const auto [candidates, measurements] = input;
   auto [seeds, parameters]              = output;
-  if (!m_cfg.useMultipoint) {
-    for (const auto candidate : *candidates) {
-      auto parameter = candidate.getParams().clone();
-      parameters->push_back(parameter);
-      auto seed = seeds->create();
-      seed.setParams(parameter);
-      seed.setPerigee(candidate.getPerigee());
-      seed.setQuality(candidate.getQuality());
-      for (const auto hit : candidate.getHits()) {
-        seed.addToHits(hit);
-      }
-    }
-    return;
-  }
-  using HitKey   = std::pair<unsigned int, int>;
-  const auto key = [](const auto& hit) -> HitKey {
+  using HitKey                          = std::pair<unsigned int, int>;
+  const auto key                        = [](const auto& hit) -> HitKey {
     const auto id = hit.getObjectID();
     return {id.collectionID, id.index};
   };
@@ -235,9 +225,6 @@ void B0TrackerActsSeeding::process(const Input& input, const Output& output) con
           signedQOverP, state(3), m_cfg.scatteringScale, m_cfg.qOverPRelativeUncertainty);
       for (int i = 0; i < 3; ++i) {
         covariance(i + 2, i + 2) += model.at(i);
-      }
-      if (m_cfg.diagonalCovariance) {
-        covariance = covariance.diagonal().asDiagonal().toDenseMatrix().eval();
       }
       covariance *= m_cfg.covarianceInflation;
       if (Eigen::LLT<b0acts::Covariance>(covariance).info() != Eigen::Success) {

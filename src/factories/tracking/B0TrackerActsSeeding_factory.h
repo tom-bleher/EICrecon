@@ -14,12 +14,8 @@ private:
   PodioInput<edm4eic::Measurement2D> m_measurements{this};
   PodioOutput<edm4eic::TrackSeed> m_seeds{this};
   PodioOutput<edm4eic::TrackParameters> m_parameters{this};
-  ParameterRef<bool> m_useMultipoint{this, "useMultipoint", config().useMultipoint,
-                                     "use ACTS multipoint; false copies the original stub seeds"};
   ParameterRef<double> m_inflation{this, "covarianceInflation", config().covarianceInflation,
                                    "inflate the correlated seed prior before CKF updates"};
-  ParameterRef<bool> m_diagonal{this, "diagonalCovariance", config().diagonalCovariance,
-                                "discard seed off-diagonal covariance before inflation"};
   ParameterRef<double> m_scattering{this, "scatteringScale", config().scatteringScale,
                                     "first-surface angular model sigma coefficient [GeV rad]"};
   ParameterRef<double> m_qop{this, "qOverPRelativeUncertainty", config().qOverPRelativeUncertainty,

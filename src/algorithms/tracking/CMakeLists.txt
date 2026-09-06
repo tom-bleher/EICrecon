@@ -27,24 +27,3 @@ plugin_include_directories(${PLUGIN_NAME} PUBLIC
 # Add libraries (same as target_include_directories but for both plugin and
 # library)
 plugin_link_libraries(${PLUGIN_NAME} Eigen3::Eigen particle_service_library)
-
-# Use the stock multipoint API when available; retain ACTS 44 compatibility.
-include(CheckCXXSourceCompiles)
-include(CMakePushCheckState)
-cmake_push_check_state(RESET)
-set(CMAKE_REQUIRED_LIBRARIES Acts::Core)
-set(_multipoint_probe
-    "EICRECON_ACTS_${Acts_VERSION_MAJOR}_${Acts_VERSION_MINOR}_${Acts_VERSION_PATCH}_HAS_MULTIPOINT"
-)
-check_cxx_source_compiles(
-  "#include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
-   int main() {
-     return Acts::estimateTrackParamsFromSpacePoints(
-       std::span<const Acts::Vector3>{}, Acts::Vector3::Zero(), 0., 0, {}, 0).ok();
-   }"
-  ${_multipoint_probe})
-cmake_pop_check_state()
-target_compile_definitions(
-  ${PLUGIN_NAME}_library
-  PRIVATE EICRECON_HAS_ACTS_MULTIPOINT=$<BOOL:${${_multipoint_probe}}>)
-unset(_multipoint_probe)

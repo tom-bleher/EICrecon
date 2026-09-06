@@ -47,13 +47,9 @@ namespace b0acts {
 } // namespace b0acts
 
 struct B0TrackerActsSeedingConfig {
-  /// False copies the original stub seeds for a controlled reconstruction comparison.
-  bool useMultipoint = true;
   /// A seed already uses the measurements that CKF will update with again.
   /// Inflate the measurement/model covariance to weaken that correlated prior.
   double covarianceInflation = 100.0;
-  /// Diagnostic alternative: discard seed covariance off-diagonals before inflation.
-  bool diagonalCovariance = false;
   /// Provisional first-surface scattering/model additions; not a calibration.
   double scatteringScale           = 3.0e-4; // GeV rad; angular sigma = scale * |q/p|
   double qOverPRelativeUncertainty = 0.025;
