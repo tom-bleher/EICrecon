@@ -5,6 +5,7 @@
 #include <Acts/Geometry/DetectorElementBase.hpp>
 #endif
 #include <Acts/Geometry/GeometryIdentifier.hpp>
+#include <Acts/Geometry/Layer.hpp>
 #include <Acts/Geometry/TrackingGeometry.hpp>
 #include <Acts/Geometry/TrackingVolume.hpp>
 #include <Acts/MagneticField/MagneticFieldContext.hpp>
@@ -42,6 +43,7 @@
 #include <utility>
 
 #include "ActsGeometryProvider.h"
+#include "B0MaterialValidation.h"
 #include "extensions/spdlog/SpdlogToActs.h"
 
 template <typename T>
@@ -191,6 +193,9 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
   // Visit surfaces
   m_init_log->info("Checking surfaces...");
   if (m_trackingGeo) {
+    // Identify B0 through the source hierarchy rather than configuration-dependent
+    // ACTS volume IDs. Check each layer once, including both mapped disc faces.
+    std::set<Acts::GeometryIdentifier> checkedB0Layers;
     // Write tracking geometry to collection of obj or ply files
     const Acts::TrackingVolume* world = m_trackingGeo->highestTrackingVolume();
     if (m_objWriteIt) {
@@ -209,7 +214,7 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
     }
 
     m_init_log->debug("visiting all the surfaces  ");
-    m_trackingGeo->visitSurfaces([this](const Acts::Surface* surface) {
+    m_trackingGeo->visitSurfaces([this, &checkedB0Layers](const Acts::Surface* surface) {
       // for now we just require a valid surface
       if (surface == nullptr) {
         m_init_log->info("no surface??? ");
@@ -226,6 +231,20 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
       if (det_element == nullptr) {
         m_init_log->error("invalid det_element!!! det_element == nullptr ");
         return;
+      }
+
+      for (auto source = det_element->sourceElement(); source.isValid(); source = source.parent()) {
+        if (std::string(source.name()) != "B0Tracker") {
+          continue;
+        }
+        const auto* layer = surface->associatedLayer();
+        if (layer == nullptr || layer->approachDescriptor() == nullptr) {
+          throw std::runtime_error("B0Tracker sensitive surface has no material approach layer");
+        }
+        if (checkedB0Layers.insert(layer->geometryId()).second) {
+          eicrecon::validateB0ApproachMaterial(*layer->approachDescriptor());
+        }
+        break;
       }
 
       // more verbose output is lower enum value

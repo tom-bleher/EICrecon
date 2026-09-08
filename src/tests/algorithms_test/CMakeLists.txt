@@ -20,6 +20,7 @@ add_executable(
   tracking_B0TrackerStubSeeder.cc
   tracking_B0TrackStationSelector.cc
   tracking_ActsToTracks.cc
+  tracking_B0MaterialValidation.cc
   tracking_CKFParticleHypothesis.cc
   digi_MPGDTrackerDigi.cc
   digi_SiliconTrackerDigi.cc

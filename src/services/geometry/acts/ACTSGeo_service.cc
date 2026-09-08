@@ -11,6 +11,7 @@
 #include <JANA/Services/JServiceLocator.h>
 #include <array>
 #include <exception>
+#include <cstdlib>
 #include <gsl/pointers>
 #include <stdexcept>
 #include <string>
@@ -111,6 +112,10 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       m_app->SetTicker(tickerEnabled);
     });
   } catch (std::exception& ex) {
+    // The PODIO writer can catch lazy factory initialization errors and omit
+    // their collections. Invalid tracking geometry must still fail the job.
+    m_app->SetExitCode(EXIT_FAILURE);
+    m_app->Quit(true); // Never join the worker that discovered the failure.
     throw JException(ex.what());
   }
 
