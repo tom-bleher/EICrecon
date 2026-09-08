@@ -19,6 +19,7 @@ add_executable(
   tracking_MPGDHitReconstruction.cc
   tracking_B0TrackerStubSeeder.cc
   tracking_B0TrackStationSelector.cc
+  tracking_B0MaterialValidation.cc
   tracking_CKFParticleHypothesis.cc
   digi_MPGDTrackerDigi.cc
   digi_SiliconTrackerDigi.cc

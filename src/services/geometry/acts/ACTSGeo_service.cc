@@ -11,6 +11,7 @@
 #include <JANA/Services/JServiceLocator.h>
 #include <array>
 #include <exception>
+#include <cstdlib>
 #include <gsl/pointers>
 #include <stdexcept>
 #include <string>
@@ -111,6 +112,12 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       m_app->SetTicker(tickerEnabled);
     });
   } catch (std::exception& ex) {
+    // PODIO can catch lazy factory initialization exceptions while probing
+    // collections. Geometry failure must still terminate the job unsuccessfully.
+    m_log->critical("ACTS geometry initialization failed: {}", ex.what());
+    m_log->flush();
+    m_app->SetExitCode(EXIT_FAILURE);
+    m_app->Quit(true); // Do not join the worker discovering the failure.
     throw JException(ex.what());
   }
 
