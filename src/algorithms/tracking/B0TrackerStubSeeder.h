@@ -103,10 +103,21 @@ namespace b0stub {
     double score{};
     bool valid{false};
   };
+  /// Bound |d^2 y/dz^2| [1/mm] from ion-frame field components [T], a bound
+  /// on both transverse slopes, and the minimum momentum [GeV]. A missing
+  /// momentum/field bound returns infinity, leaving rejection to the fit.
+  double nonBendCurvatureBound(double fieldX, double fieldY, double fieldZ, double maxAbsSlope,
+                               double pMin);
+
   /// Fast non-bending-plane compatibility for an outer-station hit pair.
+  /// Allow for |y''| <= maxAbsCurvatureY downstream of zFieldEntrance [mm].
+  /// The unchanged beamline tolerance is reapplied after the signed-curvature
+  /// correction; this envelope only prevents premature straight-road rejection.
   EndpointCompatibility endpointCompatibility(const Point3& first, const Point3& last,
                                               double maxAbsSlope, double maxBeamResidual,
-                                              bool constrainToBeamline);
+                                              bool constrainToBeamline,
+                                              double maxAbsCurvatureY = 0.0,
+                                              double zFieldEntrance   = 0.0);
 
   /// Remove the quadrupole bending y'' = kappa (q/p) Bx (uniform `fieldX` [T]
   /// from `zReference` on) from the non-bend coordinates so that a straight

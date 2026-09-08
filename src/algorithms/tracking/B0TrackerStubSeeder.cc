@@ -53,6 +53,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -232,32 +233,52 @@ namespace b0stub {
     return bendFitFromParabola(fit, fieldY, zReference, zReference, fieldY);
   }
 
+  double nonBendCurvatureBound(double fieldX, double fieldY, double fieldZ, double maxAbsSlope,
+                               double pMin) {
+    if (!(pMin > 0.0) || !std::isfinite(pMin) || !std::isfinite(fieldX) || !std::isfinite(fieldY) ||
+        !std::isfinite(fieldZ) || !(maxAbsSlope > 0.0) || !std::isfinite(maxAbsSlope)) {
+      return std::numeric_limits<double>::infinity();
+    }
+    // y'' = kappa (q/p) sqrt(1+tx^2+ty^2)
+    //       * [(1+ty^2) Bx - tx ty By - tx Bz].
+    const double slope2 = maxAbsSlope * maxAbsSlope;
+    return kBend / pMin * std::sqrt(1.0 + 2.0 * slope2) *
+           ((1.0 + slope2) * std::abs(fieldX) + slope2 * std::abs(fieldY) +
+            maxAbsSlope * std::abs(fieldZ));
+  }
+
   EndpointCompatibility endpointCompatibility(const Point3& first, const Point3& last,
                                               double maxAbsSlope, double maxBeamResidual,
-                                              bool constrainToBeamline) {
+                                              bool constrainToBeamline, double maxAbsCurvatureY,
+                                              double zFieldEntrance) {
     EndpointCompatibility result;
     const double dz = last.z - first.z;
     if (!(dz > 0.0) || !std::isfinite(first.y) || !std::isfinite(first.z) ||
-        !std::isfinite(last.y) || !std::isfinite(last.z) || !(maxAbsSlope > 0.0)) {
+        !std::isfinite(last.y) || !std::isfinite(last.z) || !(maxAbsSlope > 0.0) ||
+        !(maxAbsCurvatureY >= 0.0) || !std::isfinite(zFieldEntrance) || !(first.z > 0.0)) {
       return result;
     }
+    const double zEntrance   = std::clamp(zFieldEntrance, 0.0, first.z);
+    const double slopeWindow = maxAbsSlope + maxAbsCurvatureY * (last.z - zEntrance);
     result.slopeY = (last.y - first.y) / dz;
-    if (!std::isfinite(result.slopeY) || std::abs(result.slopeY) > maxAbsSlope) {
+    if (!std::isfinite(result.slopeY) || std::abs(result.slopeY) > slopeWindow) {
       return result;
     }
 
+    double beamWindow = maxBeamResidual;
     if (constrainToBeamline && maxBeamResidual > 0.0) {
-      if (first.z == 0.0) {
-        return result;
-      }
+      // Integrate a bounded acceleration from the field entrance. The
+      // resulting endpoint residual is bounded by
+      // A/2 * [(zLast-zEntrance)^2 - zLast/zFirst*(zFirst-zEntrance)^2].
+      beamWindow += 0.5 * maxAbsCurvatureY * dz * (last.z - zEntrance * zEntrance / first.z);
       result.beamResidual = last.y - first.y * last.z / first.z;
-      if (!std::isfinite(result.beamResidual) || std::abs(result.beamResidual) > maxBeamResidual) {
+      if (!std::isfinite(result.beamResidual) || std::abs(result.beamResidual) > beamWindow) {
         return result;
       }
     }
-    const double slopeScore = std::abs(result.slopeY) / maxAbsSlope;
+    const double slopeScore = std::abs(result.slopeY) / slopeWindow;
     const double beamScore  = constrainToBeamline && maxBeamResidual > 0.0
-                                  ? std::abs(result.beamResidual) / maxBeamResidual
+                                  ? std::abs(result.beamResidual) / beamWindow
                                   : 0.0;
     result.score            = beamScore + slopeScore;
     result.valid            = true;
@@ -924,6 +945,27 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   const auto fieldProvider = m_acts_context->getFieldProvider();
   auto fieldCache = fieldProvider->makeCache(m_acts_context->getActsMagneticFieldContext());
 
+  // The quadrupole bends y before a candidate's q/p is known. Use the
+  // minimum allowed momentum to make conservative preliminary roads, rather
+  // than applying the prompt straight-line cut to uncorrected hits. Endpoint
+  // field samples estimate the field bound for the smooth B0 multipole; they
+  // are not a guaranteed bound for an arbitrary field map. The fitted,
+  // signed-curvature correction below still has to pass the original cuts.
+  std::vector<double> curvatureBounds(ion.size(), std::numeric_limits<double>::infinity());
+  if (m_cfg.pMin > 0.0) {
+    for (std::size_t i = 0; i < ion.size(); ++i) {
+      const auto& point = ion[i];
+      const auto field  = fieldProvider->getField(
+          {point.x * ca + point.z * sa, point.y, -point.x * sa + point.z * ca}, fieldCache);
+      if (field.ok()) {
+        const Acts::Vector3 lab = field.value() / Acts::UnitConstants::T;
+        curvatureBounds[i] = b0stub::nonBendCurvatureBound(lab.x() * ca - lab.z() * sa, lab.y(),
+                                                           lab.x() * sa + lab.z() * ca,
+                                                           m_cfg.maxAbsTransverseSlope, m_cfg.pMin);
+      }
+    }
+  }
+
   // ------------------------------------------------------------------
   // Enumerate candidates: one hit per station, capped combinatorics.
   // In addition to the full station set, try leave-one-station-out
@@ -1036,6 +1078,14 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
       return false;
     }
+    // Now q/p is measured and the y fit describes the upstream ray. Enforce
+    // the configured beamline tolerance without the preliminary envelope.
+    if (!b0stub::endpointCompatibility(
+             {.y = cand.fit.y(zFirst), .z = zFirst}, {.y = cand.fit.y(zLast), .z = zLast},
+             m_cfg.maxAbsTransverseSlope, m_cfg.maxYBeamlineResidual, m_cfg.constrainToBeamline)
+             .valid) {
+      return false;
+    }
 
     cand.txFirst = cand.fit.tx(zFirst);
     if (std::abs(cand.txFirst) > m_cfg.maxAbsTransverseSlope) {
@@ -1065,9 +1115,8 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   unsigned int endpointPairs    = 0;
   unsigned int endpointRejected = 0;
   for (const auto& stationHits : subsets) {
-    // The dipole does not bend in y, so the hits of a single track lie on a
-    // straight line in y(z). Anchor on the outermost two stations and keep
-    // only the intermediate hits that sit inside a road around that chord.
+    // Anchor on the outermost two stations and keep intermediate hits inside
+    // a chord road enlarged by the allowed non-bend curvature.
     // This removes most cross-track combinations before any fit, so the
     // budget below binds only in genuinely dense events rather than
     // truncating the enumeration in lexicographic order.
@@ -1078,6 +1127,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     struct EndpointPair {
       std::size_t first{};
       std::size_t last{};
+      double maxAbsCurvatureY{};
       b0stub::EndpointCompatibility compatibility;
     };
     std::vector<EndpointPair> compatibleEndpoints;
@@ -1085,14 +1135,24 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     for (const std::size_t hFirst : firstStation) {
       for (const std::size_t hLast : lastStation) {
         ++endpointPairs;
-        const auto compatibility =
-            b0stub::endpointCompatibility(ion[hFirst], ion[hLast], m_cfg.maxAbsTransverseSlope,
-                                          m_cfg.maxYBeamlineResidual, m_cfg.constrainToBeamline);
+        const double curvature = std::max(curvatureBounds[hFirst], curvatureBounds[hLast]);
+        double zEntrance       = m_z_field_entrance;
+        if (m_z_face_lab > 0.0) {
+          // Earliest crossing of the lab-z entrance plane allowed by the
+          // first hit and |tx| <= maxAbsTransverseSlope. This avoids shrinking
+          // the curvature envelope because of the tilted ion coordinates.
+          const double tiltSlope = std::abs(sa) * m_cfg.maxAbsTransverseSlope;
+          zEntrance =
+              (m_z_face_lab + sa * ion[hFirst].x - tiltSlope * ion[hFirst].z) / (ca - tiltSlope);
+        }
+        const auto compatibility = b0stub::endpointCompatibility(
+            ion[hFirst], ion[hLast], m_cfg.maxAbsTransverseSlope, m_cfg.maxYBeamlineResidual,
+            m_cfg.constrainToBeamline, curvature, zEntrance);
         if (!compatibility.valid) {
           ++endpointRejected;
           continue;
         }
-        compatibleEndpoints.push_back({hFirst, hLast, compatibility});
+        compatibleEndpoints.push_back({hFirst, hLast, curvature, compatibility});
       }
     }
     std::ranges::sort(compatibleEndpoints, [&](const EndpointPair& a, const EndpointPair& b) {
@@ -1121,7 +1181,11 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         for (std::size_t idx : stationHits[s]) {
           const double yPred    = ion[hFirst].y + slopeY * (ion[idx].z - zA);
           const double residual = std::abs(ion[idx].y - yPred);
-          if (residual <= m_cfg.yRoadWidth) {
+          // A curve with |y''| <= A deviates from its endpoint chord by at
+          // most A/2 * (z-zFirst)*(zLast-z) between the endpoints.
+          const double allowance =
+              0.5 * endpoints.maxAbsCurvatureY * (ion[idx].z - zA) * (ion[hLast].z - ion[idx].z);
+          if (residual <= m_cfg.yRoadWidth + allowance) {
             ranked.emplace_back(residual, idx);
           }
         }

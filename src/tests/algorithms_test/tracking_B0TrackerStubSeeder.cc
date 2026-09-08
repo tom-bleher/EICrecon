@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
@@ -22,6 +23,7 @@ using eicrecon::b0stub::endpointCompatibility;
 using eicrecon::b0stub::fitStub;
 using eicrecon::b0stub::fitWithNonBendCorrection;
 using eicrecon::b0stub::groupHitsByStation;
+using eicrecon::b0stub::nonBendCurvatureBound;
 using eicrecon::b0stub::perigeeFromRay;
 using eicrecon::b0stub::Point3;
 using eicrecon::b0stub::removeNonBendCurvature;
@@ -250,6 +252,33 @@ TEST_CASE("B0 scattering covariance additions scale with q/p and project onto ph
   CHECK(scatteringCovarianceAdditions(-qOverP, theta, 1.0e-3, 0.02) == additions);
 }
 
+TEST_CASE("B0 endpoint curvature envelope preserves a finite prompt cut", "[B0TrackerStubSeeder]") {
+  const Point3 first{.y = 70.0, .z = 6100.0};
+  const Point3 last{.y = 70.0, .z = 6850.0};
+  CHECK_FALSE(endpointCompatibility(first, last, 0.1, 5.0, true).valid);
+  const double curvature = nonBendCurvatureBound(-0.6, 1.2, 0.0, 0.1, 3.0);
+  CHECK(endpointCompatibility(first, last, 0.1, 5.0, true, curvature, 5800.0).valid);
+  // The preliminary allowance is finite: an unrelated endpoint far beyond
+  // both the prompt tolerance and the largest permitted bend is still cut.
+  CHECK_FALSE(
+      endpointCompatibility(first, {.y = -100.0, .z = last.z}, 0.1, 5.0, true, curvature, 5800.0)
+          .valid);
+  CHECK(nonBendCurvatureBound(-0.6, 1.2, 0.0, 0.1, 6.0) == Approx(curvature / 2.0));
+  CHECK(nonBendCurvatureBound(0.0, 0.0, 0.0, 0.1, 3.0) == 0.0);
+
+  // Without a momentum bound, or with an unavailable preliminary field
+  // sample, only the preliminary gate is relaxed. The corrected fit uses
+  // the finite, zero-curvature call above and must still pass that cut.
+  for (const double unbounded :
+       {nonBendCurvatureBound(-0.6, 1.2, 0.0, 0.1, 0.0),
+        nonBendCurvatureBound(std::numeric_limits<double>::quiet_NaN(), 1.2, 0.0, 0.1, 3.0)}) {
+    REQUIRE(std::isinf(unbounded));
+    const auto compatible = endpointCompatibility(first, last, 0.1, 5.0, true, unbounded, 5800.0);
+    CHECK(compatible.valid);
+    CHECK(std::isfinite(compatible.score));
+  }
+}
+
 namespace {
 
 /// Analytic B0pf-like combined-function field in the ion frame: hard-edged in
@@ -267,11 +296,29 @@ struct BoxQuadrupoleField {
   }
 };
 
+/// The local epic 5x41 B0PF field: a lab-aligned hard-edged multipole,
+/// transformed into the ion frame. Unlike BoxQuadrupoleField, the field
+/// entrance and its quadrupole center are not aligned with the ion axis.
+struct LabFrameB0Field {
+  std::array<double, 3> operator()(double x, double y, double z) const {
+    const double ca      = std::cos(-0.025);
+    const double sa      = std::sin(-0.025);
+    const double xLab    = x * ca + z * sa;
+    const double zLab    = -x * sa + z * ca;
+    const double xMagnet = xLab + 145.779265;
+    if (zLab < 5800.0 || zLab > 7000.0 || xMagnet * xMagnet + y * y > 200.0 * 200.0) {
+      return {};
+    }
+    const double bx = -8.12238283e-3 * y;
+    return {bx * ca, 1.1840539 - 8.12238283e-3 * xMagnet, bx * sa};
+  }
+};
+
 /// Lorentz-force RK4 propagation of a charged particle from the origin, in the
 /// ion frame, returning the positions at the requested stations.
-std::vector<Point3> propagateTruth(const BoxQuadrupoleField& field, double qOverP, double tx0,
-                                   double ty0, const std::array<double, 4>& stations,
-                                   double variance) {
+template <typename Field>
+std::vector<Point3> propagateTruth(const Field& field, double qOverP, double tx0, double ty0,
+                                   const std::array<double, 4>& stations, double variance) {
   constexpr double kBend = 2.998e-4;
   // State: position (0-2) and unit direction (3-5) in the ion frame.
   using State = Eigen::Matrix<double, 6, 1>;
@@ -308,6 +355,60 @@ std::vector<Point3> propagateTruth(const BoxQuadrupoleField& field, double qOver
 }
 
 } // namespace
+
+TEST_CASE("B0 endpoint pruning retains quadrupole-bent low-momentum prompt tracks",
+          "[B0TrackerStubSeeder]") {
+  const LabFrameB0Field field;
+  // Realistic B0 station centers (ion-frame mm), from the 5x41 geometry.
+  constexpr std::array<double, 4> stations{6101.84, 6377.926, 6627.004, 6852.074};
+  constexpr double zEntrance     = 5800.0;
+  constexpr double maxSlope      = 0.1;
+  constexpr double beamTolerance = 5.0;
+  constexpr double roadWidth     = 5.0;
+  constexpr double pMin          = 3.0;
+  for (const auto [momentum, ty] : {std::pair{8.0, 0.012}, std::pair{15.0, 0.020}}) {
+    for (const double charge : {-1.0, 1.0}) {
+      INFO("p=" << momentum << " GeV, ty=" << ty << ", q=" << charge);
+      const auto points = propagateTruth(field, charge / momentum, -0.002, ty, stations, 4.0e-4);
+      REQUIRE(points.size() == 4);
+      // These are the outer pairs of the full and all leave-one-out subsets.
+      for (const auto [i, j] : {std::pair{0U, 3U}, std::pair{1U, 3U}, std::pair{0U, 2U}}) {
+        const auto& first = points.at(i);
+        const auto& last  = points.at(j);
+        CHECK_FALSE(endpointCompatibility(first, last, maxSlope, beamTolerance, true).valid);
+        const auto firstField  = field(first.x, first.y, first.z);
+        const auto lastField   = field(last.x, last.y, last.z);
+        const double curvature = std::max(
+            nonBendCurvatureBound(firstField[0], firstField[1], firstField[2], maxSlope, pMin),
+            nonBendCurvatureBound(lastField[0], lastField[1], lastField[2], maxSlope, pMin));
+        const auto compatible =
+            endpointCompatibility(first, last, maxSlope, beamTolerance, true, curvature, zEntrance);
+        REQUIRE(compatible.valid);
+        for (std::size_t middle = i + 1; middle < j; ++middle) {
+          const auto& point      = points.at(middle);
+          const double chord     = first.y + compatible.slopeY * (point.z - first.z);
+          const double allowance = 0.5 * curvature * (point.z - first.z) * (last.z - point.z);
+          CHECK(std::abs(point.y - chord) <= roadWidth + allowance);
+        }
+      }
+
+      // The same signed-q/p correction used by the seeder restores prompt
+      // compatibility; no larger beamline tolerance is needed after fitting.
+      const auto fit = fitStub(points);
+      REQUIRE(fit.valid);
+      const double zMid   = 0.5 * (points.front().z + points.back().z);
+      const auto midField = field(fit.x(zMid), fit.y(zMid), zMid);
+      const auto bend     = bendFitFromParabola(fit, midField[1], zEntrance);
+      REQUIRE(bend.valid);
+      const auto corrected = fitWithNonBendCorrection(points, midField[0], bend.qOverP, zEntrance);
+      REQUIRE(corrected.valid);
+      CHECK(endpointCompatibility({.y = corrected.y(stations.front()), .z = stations.front()},
+                                  {.y = corrected.y(stations.back()), .z = stations.back()},
+                                  maxSlope, beamTolerance, true)
+                .valid);
+    }
+  }
+}
 
 TEST_CASE("B0 seed recovers charge, momentum and direction of an RK4 truth track",
           "[B0TrackerStubSeeder]") {

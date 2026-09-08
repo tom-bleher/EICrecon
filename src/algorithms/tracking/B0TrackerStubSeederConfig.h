@@ -36,15 +36,15 @@ struct B0TrackerStubSeederConfig {
   /// Minimum number of distinct stations in a seed candidate
   unsigned int minStations = 3;
   /// Half-width (mm) of the non-bend-plane road used to preselect hits before
-  /// the fit. The dipole does not bend in y, so the hits of one track are
-  /// collinear in y to well within this width, while hits of different tracks
-  /// generally are not. This keeps the enumeration below maxCombinations in
-  /// busy events instead of truncating it.
+  /// the fit. The road includes an additional curvature allowance from pMin
+  /// and the sampled field, since the B0 quadrupole also bends in y.
   float yRoadWidth = 5.0;
   /// Maximum non-bending residual [mm] of an endpoint pair relative to a ray
   /// from the beamline. Applied only when constrainToBeamline is true; <=0
-  /// disables it. Compatible pairs are sorted by this residual before the
-  /// combination budget is spent.
+  /// disables it. Preliminary endpoint pruning includes a field-derived
+  /// curvature allowance; the original tolerance is applied after the signed
+  /// non-bend correction. Compatible pairs are ranked by normalized residual
+  /// before the combination budget is spent.
   float maxYBeamlineResidual = 5.0;
   /// Cap on hit combinations tried per event
   unsigned int maxCombinations = 512;
