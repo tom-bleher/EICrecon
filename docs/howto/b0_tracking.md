@@ -13,6 +13,7 @@ built against that ACTS version:
 
 ```bash
 source /path/to/epic/install/bin/thisepic.sh epic_ip6_extended
+export DETECTOR_CACHE="$DETECTOR_PATH"
 source /path/to/acts-47.7/install/bin/this_acts.sh
 source /path/to/EICrecon/install/bin/eicrecon-this.sh
 export JANA_PLUGIN_PATH="$EICrecon_ROOT/lib/EICrecon/plugins:/opt/local/lib/JANA/plugins"
@@ -25,6 +26,13 @@ Put these selections in the overlay's startup script as well. Keep its
 The explicit plugin path excludes plugins from other EICrecon/ACTS builds. An
 executable's configure-time version string can lag incremental source builds;
 record the source commit and actual loaded library paths with validation runs.
+
+Simulation and reconstruction must use matching physical geometry, not merely
+the same configuration name or detector IDs. B0 module IDs follow placement
+order; removing or moving modules can change the positions associated with
+surviving IDs. Resimulate after layout changes, or activate the matching frozen
+geometry when reconstructing historical simulation. Record the compact XML and
+construction-plugin checksums with the input sample.
 
 ## Simulation and material
 
@@ -59,3 +67,19 @@ measurement surfaces and local coordinates, material/navigation coverage over B0
 acceptance, physical-station counts, persisted relations, and residual/pull
 closure. A successful startup or positive covariance alone does not validate
 tracking resolution or uncertainty coverage.
+
+## External B0 candidates
+
+Leave combinatorial seeding as the default. To replay externally ordered RecHit
+lists through the native stub estimator and CKF, pass a JSON file keyed by
+`EventHeader` run and event numbers:
+
+```text
+-Ptracking:B0TrackerSeeds:candidateFile=/path/to/replay.json
+```
+
+Each candidate is an ordered list of RecHit collection indices with optional
+`cellID` checks. Combinatorics, ranking, and `maxSeeds` are not reapplied;
+estimator compatibility cuts still are. The file must contain every processed
+event. Hit indices are those of the reconstruction job that produced the graph,
+rebound to the live `B0TrackerRecHits` collection.
