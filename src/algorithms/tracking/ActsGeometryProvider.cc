@@ -68,6 +68,12 @@ public:
       : m_inner(rConfig, jFileName, level), m_log(std::move(logger)) {}
 
   void decorate(Acts::Surface& surface) const override {
+    // Preserve the XML mapping targets: missing JSON entries leave prototypes
+    // in place, which are not physical material usable by the fitter.
+    if (surface.geometryId().approach() != 0 &&
+        eicrecon::isPrototypeMaterial(surface.surfaceMaterial())) {
+      m_expectedMaterial.insert(surface.geometryId());
+    }
     m_inner.decorate(surface);
     const auto id = surface.geometryId();
     m_log->trace("{} assigned to surface with geometryId=(volume={}, boundary={}, layer={}, "
@@ -89,6 +95,8 @@ public:
 
   void decorate(Acts::TrackingVolume& volume) const override { m_inner.decorate(volume); }
 
+  const std::set<Acts::GeometryIdentifier>& expectedMaterial() const { return m_expectedMaterial; }
+
   /// Report every decorated layer that never received material on any approach surface.
   void check() const {
     for (const auto& key : m_decoratedLayers) {
@@ -101,6 +109,7 @@ public:
   }
 
 private:
+  mutable std::set<Acts::GeometryIdentifier> m_expectedMaterial;
   Acts::JsonMaterialDecorator m_inner;
   std::shared_ptr<spdlog::logger> m_log;
   /// All (volume, layer) pairs seen during decoration
@@ -193,9 +202,6 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
   // Visit surfaces
   m_init_log->info("Checking surfaces...");
   if (m_trackingGeo) {
-    // Identify B0 through the source hierarchy rather than configuration-dependent
-    // ACTS volume IDs. Check each layer once, including both mapped disc faces.
-    std::set<Acts::GeometryIdentifier> checkedB0Layers;
     // Write tracking geometry to collection of obj or ply files
     const Acts::TrackingVolume* world = m_trackingGeo->highestTrackingVolume();
     if (m_objWriteIt) {
@@ -214,7 +220,9 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
     }
 
     m_init_log->debug("visiting all the surfaces  ");
-    m_trackingGeo->visitSurfaces([this, &checkedB0Layers](const Acts::Surface* surface) {
+    const auto epicDeco = std::dynamic_pointer_cast<const EpicJsonMaterialDecorator>(materialDeco);
+    std::set<Acts::GeometryIdentifier> checkedB0Layers;
+    m_trackingGeo->visitSurfaces([this, &epicDeco, &checkedB0Layers](const Acts::Surface* surface) {
       // for now we just require a valid surface
       if (surface == nullptr) {
         m_init_log->info("no surface??? ");
@@ -233,18 +241,24 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
         return;
       }
 
-      for (auto source = det_element->sourceElement(); source.isValid(); source = source.parent()) {
-        if (std::string(source.name()) != "B0Tracker") {
-          continue;
+      // Only validate reconstruction with a supplied map. Geometry construction
+      // without a decorator is also used to generate new material maps.
+      if (epicDeco) {
+        for (auto source = det_element->sourceElement(); source.isValid();
+             source      = source.parent()) {
+          if (std::string(source.name()) != "B0Tracker") {
+            continue;
+          }
+          const auto* layer = surface->associatedLayer();
+          if (layer == nullptr || layer->approachDescriptor() == nullptr) {
+            throw std::runtime_error("B0Tracker sensitive surface has no material approach layer");
+          }
+          if (checkedB0Layers.insert(layer->geometryId()).second) {
+            eicrecon::validateB0ApproachMaterial(*layer->approachDescriptor(),
+                                                 epicDeco->expectedMaterial());
+          }
+          break;
         }
-        const auto* layer = surface->associatedLayer();
-        if (layer == nullptr || layer->approachDescriptor() == nullptr) {
-          throw std::runtime_error("B0Tracker sensitive surface has no material approach layer");
-        }
-        if (checkedB0Layers.insert(layer->geometryId()).second) {
-          eicrecon::validateB0ApproachMaterial(*layer->approachDescriptor());
-        }
-        break;
       }
 
       // more verbose output is lower enum value

@@ -112,10 +112,12 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       m_app->SetTicker(tickerEnabled);
     });
   } catch (std::exception& ex) {
-    // The PODIO writer can catch lazy factory initialization errors and omit
-    // their collections. Invalid tracking geometry must still fail the job.
+    // PODIO can catch lazy factory initialization exceptions while probing
+    // collections. Geometry failure must still terminate the job unsuccessfully.
+    m_log->critical("ACTS geometry initialization failed: {}", ex.what());
+    m_log->flush();
     m_app->SetExitCode(EXIT_FAILURE);
-    m_app->Quit(true); // Never join the worker that discovered the failure.
+    m_app->Quit(true); // Do not join the worker discovering the failure.
     throw JException(ex.what());
   }
 
