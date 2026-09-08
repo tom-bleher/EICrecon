@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "ActsToTracks.h"
+#include "BoundToCartesianCovariance.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 
 namespace eicrecon {
@@ -145,13 +146,14 @@ void ActsToTracks::process(const Input& input, const Output& output) const {
     const Acts::Vector2 localPos{parameter[Acts::eBoundLoc0], parameter[Acts::eBoundLoc1]};
     const Acts::Vector3 direction =
         Acts::makeDirectionFromPhiTheta(parameter[Acts::eBoundPhi], parameter[Acts::eBoundTheta]);
-    const Acts::Vector3 globalPos = track.referenceSurface().localToGlobal(
+    const auto gctx =
 #if Acts_VERSION_MAJOR >= 45
-        Acts::GeometryContext::dangerouslyDefaultConstruct(),
+        Acts::GeometryContext::dangerouslyDefaultConstruct();
 #else
-        Acts::GeometryContext{},
+        Acts::GeometryContext{};
 #endif
-        localPos, direction);
+    const Acts::Vector3 globalPos =
+        track.referenceSurface().localToGlobal(gctx, localPos, direction);
     track_out.setPosition( // Track 3-position at the perigee [mm]
         edm4hep::Vector3f{static_cast<float>(globalPos.x()), static_cast<float>(globalPos.y()),
                           static_cast<float>(globalPos.z())});
@@ -171,8 +173,18 @@ void ActsToTracks::process(const Input& input, const Output& output) const {
         edm4hep::utils::sphericalToVector(p, parameter[Acts::eBoundTheta],
                                           parameter[Acts::eBoundPhi]));
 
-    track_out.setPositionMomentumCovariance( // Covariance matrix in basis [x,y,z,px,py,pz]
-        edm4eic::Cov6f());
+    edm4eic::Cov6f positionMomentumCovariance;
+    if (std::isfinite(qOverP) && qOverP != 0.0) {
+      const auto cartesianCovariance =
+          boundToCartesianCovariance(track.referenceSurface(), gctx, parameter, covariance,
+                                     track.particleHypothesis().absoluteCharge());
+      for (unsigned int row = 0; row < 6; ++row) {
+        for (unsigned int col = row; col < 6; ++col) {
+          positionMomentumCovariance(row, col) = cartesianCovariance(row, col);
+        }
+      }
+    }
+    track_out.setPositionMomentumCovariance(positionMomentumCovariance);
     track_out.setTime( // Track time at the perigee [ns]
         static_cast<float>(parameter[Acts::eBoundTime] / Acts::UnitConstants::ns));
     track_out.setTimeError( // Error on the track perigee time
