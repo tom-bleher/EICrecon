@@ -7,10 +7,14 @@
 #include <Eigen/Dense>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "algorithms/tracking/B0CandidateReplay.h"
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
 
 using Catch::Approx;
@@ -851,4 +855,47 @@ TEST_CASE("B0 replay resolves original hit identity through a shuffled subset",
   subset.push_back(hits[0]);
   CHECK_THROWS_AS(eicrecon::b0stub::resolveHitObjectIDs(subset, {hits[2].getObjectID()}),
                   std::invalid_argument);
+}
+
+TEST_CASE("B0 replay JSON rebinds hit indices onto the live collection", "[B0TrackerStubSeeder]") {
+  const auto path = (std::filesystem::temp_directory_path() / "b0_replay_candidates.json").string();
+  {
+    std::ofstream out(path);
+    out << R"({
+      "format_version": 1,
+      "events": [
+        {"run": 4294967295, "event": 11, "candidates": [
+          {"hits": [{"index": 0, "cellID": 101}, {"index": 2, "cellID": 103}]}
+        ]},
+        {"run": 1, "event": 2, "candidates": []}
+      ]
+    })";
+  }
+  const auto file = eicrecon::loadB0ReplayFile(path);
+  CHECK(file.events.size() == 2);
+  const auto& event = file.events.at({4294967295, 11});
+  CHECK(event.candidates.size() == 1);
+  CHECK(event.candidates[0].size() == 2);
+  CHECK(event.candidates[0][0].index == 0);
+  REQUIRE(event.candidates[0][0].cellID.has_value());
+  CHECK(*event.candidates[0][0].cellID == 101);
+
+  edm4eic::TrackerHitCollection hits;
+  hits.setID(0xABCDu);
+  auto a = hits.create();
+  a.setCellID(101);
+  auto b = hits.create();
+  b.setCellID(102);
+  auto c = hits.create();
+  c.setCellID(103);
+  const auto bound = eicrecon::bindReplayCandidates(hits, event.candidates);
+  REQUIRE(bound.size() == 1);
+  CHECK(bound[0].size() == 2);
+  CHECK(bound[0][0] == hits[0].getObjectID());
+  CHECK(bound[0][1] == hits[2].getObjectID());
+
+  auto wrongCell         = event.candidates;
+  wrongCell[0][0].cellID = 999;
+  CHECK_THROWS_AS(eicrecon::bindReplayCandidates(hits, wrongCell), std::invalid_argument);
+  CHECK_THROWS_AS(eicrecon::loadB0ReplayFile(path + ".missing"), std::invalid_argument);
 }

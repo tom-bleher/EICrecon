@@ -143,6 +143,12 @@ struct B0TrackerStubSeederConfig {
   float scatteringScale = 3.0e-4;
   /// Relative q/p uncertainty from scattering and the trajectory model.
   float qOverPRelativeUncertainty = 0.025;
+
+  /// Optional JSON file of externally ordered RecHit candidates. Empty (default)
+  /// keeps combinatorial seeding. When set, combinatorics are skipped and each
+  /// event's candidates are run through the native estimator/covariance path.
+  /// The file is keyed by EventHeader (run, event); missing events fail.
+  std::string candidateFile;
 };
 
 } // namespace eicrecon
