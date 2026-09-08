@@ -6,8 +6,13 @@
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
+#include <cstdint>
+#include <edm4hep/EventHeaderCollection.h>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
+#include "algorithms/tracking/B0CandidateReplay.h"
 #include "algorithms/tracking/B0TrackerStubSeeder.h"
 #include "algorithms/tracking/B0TrackerStubSeederConfig.h"
 #include "extensions/jana/JOmniFactory.h"
@@ -21,6 +26,7 @@ private:
   using AlgoT = eicrecon::B0TrackerStubSeeder;
   std::unique_ptr<AlgoT> m_algo;
 
+  PodioInput<edm4hep::EventHeader> m_headers_input{this};
   PodioInput<edm4eic::TrackerHit> m_hits_input{this};
   PodioOutput<edm4eic::TrackSeed> m_seeds_output{this};
   PodioOutput<edm4eic::TrackParameters> m_trackparams_output{this};
@@ -90,6 +96,11 @@ private:
   ParameterRef<float> m_qOverPRelativeUncertainty{this, "qOverPRelativeUncertainty",
                                                   config().qOverPRelativeUncertainty,
                                                   "relative q/p scattering/model uncertainty"};
+  ParameterRef<std::string> m_candidateFile{
+      this, "candidateFile", config().candidateFile,
+      "JSON of external RecHit candidates; empty keeps combinatorial seeding"};
+
+  B0ReplayFile m_replay;
 
 public:
   void Configure() {
@@ -97,12 +108,33 @@ public:
     m_algo->level(static_cast<algorithms::LogLevel>(logger()->level()));
     m_algo->applyConfig(config());
     m_algo->init();
+    if (!config().candidateFile.empty()) {
+      m_replay = loadB0ReplayFile(config().candidateFile);
+    }
   }
 
   void ChangeRun(int32_t /* run_number */) {}
 
   void Process(int32_t /* run_number */, uint64_t /* event_number */) {
-    m_algo->process({m_hits_input()}, {m_seeds_output().get(), m_trackparams_output().get()});
+    if (config().candidateFile.empty()) {
+      m_algo->process({m_hits_input()}, {m_seeds_output().get(), m_trackparams_output().get()});
+      return;
+    }
+    const auto headers = m_headers_input();
+    if (headers->size() != 1) {
+      throw std::runtime_error(
+          "B0TrackerStubSeeder: expected one EventHeader for candidate replay");
+    }
+    const std::int64_t run   = static_cast<std::int64_t>(headers->at(0).getRunNumber());
+    const std::int64_t event = static_cast<std::int64_t>(headers->at(0).getEventNumber());
+    const auto it            = m_replay.events.find({run, event});
+    if (it == m_replay.events.end()) {
+      throw std::runtime_error("B0TrackerStubSeeder: no replay candidates for run/event (" +
+                               std::to_string(run) + ", " + std::to_string(event) + ")");
+    }
+    auto bound = bindReplayCandidates(*m_hits_input(), it->second.candidates);
+    m_algo->process({m_hits_input()}, {m_seeds_output().get(), m_trackparams_output().get()},
+                    bound);
   }
 };
 

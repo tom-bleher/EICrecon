@@ -385,8 +385,8 @@ void InitPlugin(JApplication* app) {
   // z ~ 6 m, outside the central-tracker windows, and the helix estimator
   // assumes Bz. Use a dipole stub seeder instead. See eic/EICrecon#2746.
   app->Add(new JOmniFactoryGeneratorT<B0TrackerStubSeeder_factory>(
-      "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
-      app));
+      "B0TrackerSeeds", {"EventHeader", "B0TrackerRecHits"},
+      {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {}, app));
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTrajectories", {"B0TrackerSeeds", "B0TrackerMeasurements"},
