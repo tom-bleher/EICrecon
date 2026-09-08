@@ -7,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <stdexcept>
+#include <limits>
 
 #include "algorithms/tracking/CKFTracking.h"
 #include "algorithms/tracking/CKFTrackingConfig.h"
@@ -41,4 +42,18 @@ TEST_CASE("CKF rejects unsupported signed and neutral hypotheses", "[tracking][c
   for (const int pdg : {0, -11, -211, -2212, 22, 111, 2112, 999999}) {
     CHECK_THROWS_AS(eicrecon::CKFTracking::makeParticleHypothesis(pdg), std::invalid_argument);
   }
+}
+
+TEST_CASE("CKF refit covariance scale rejects invalid priors", "[tracking][ckfhypothesis]") {
+  CHECK_NOTHROW(eicrecon::CKFTracking::validateRefitCovarianceScale(0.0));
+  CHECK_NOTHROW(eicrecon::CKFTracking::validateRefitCovarianceScale(1.0));
+  CHECK_NOTHROW(eicrecon::CKFTracking::validateRefitCovarianceScale(100.0));
+  CHECK_THROWS_AS(eicrecon::CKFTracking::validateRefitCovarianceScale(-1.0), std::invalid_argument);
+  CHECK_THROWS_AS(eicrecon::CKFTracking::validateRefitCovarianceScale(0.5), std::invalid_argument);
+  CHECK_THROWS_AS(
+      eicrecon::CKFTracking::validateRefitCovarianceScale(std::numeric_limits<double>::infinity()),
+      std::invalid_argument);
+  CHECK_THROWS_AS(
+      eicrecon::CKFTracking::validateRefitCovarianceScale(std::numeric_limits<double>::quiet_NaN()),
+      std::invalid_argument);
 }

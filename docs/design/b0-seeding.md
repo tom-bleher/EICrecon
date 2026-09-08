@@ -225,3 +225,25 @@ measurement gating; their fitted chi-square/ndf values are 116.64/12,
 108.21/8 and 102.92/6. The production cutoff remains 50. This small count
 change is not an efficiency improvement claim, and the looser diagnostic
 cut is not a recommended default.
+
+## ACTS 47.7 endpoint and final-track validation (2026-09-08)
+
+The early endpoint/intermediate y roads now allow field-derived quadrupole
+curvature; the original beamline tolerance is checked after signed correction.
+Independent RK4 tests cover both charges, and fresh 100-event npsim probes
+recover 89/91 eligible 8 GeV protons and 74/77 at 15 GeV, versus 2/91 and 0/77
+before this change. The sampled-field envelope targets the smooth B0 multipole;
+it is not a general guarantee for arbitrary magnetic-field structure.
+
+Final tracks now carry the surface-Jacobian-transformed Cartesian covariance.
+Geometry initialization rejects missing or prototype B0 approach material and
+sets a failing process exit code even when the output writer catches the error.
+
+An opt-in assigned-hit Kalman refit tests seed-prior sensitivity while retaining
+material-aware extrapolation. **Its default remains disabled.** Three
+1,000-event samples give only 63–74% coverage of the nominal joint 95% region,
+with no stable improvement across covariance scales. The propagation fix does
+not solve final covariance calibration. Neither this evidence nor the synthetic
+occupancy study justifies changing the CKF chi-square or search-budget defaults.
+See the [reproducible benchmark and pinned results](../../src/benchmarks/b0_tracking/README.md)
+for definitions, inputs, cuts, limits and commands.

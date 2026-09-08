@@ -42,6 +42,9 @@ private:
                                             config().particleHypothesisPdg,
                                             "Absolute fit-hypothesis PDG: 11, 13, 211 (default), "
                                             "321, 2212; charge sign from seed q/p, not PID"};
+  ParameterRef<double> m_refitSeedCovarianceScale{
+      this, "RefitSeedCovarianceScale", config().refitSeedCovarianceScale,
+      "Assigned-hit refit seed-covariance scale (0 disables, >=1 enables); finding is unchanged"};
   ParameterRef<std::size_t> m_numMeasurementsMin{
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
@@ -63,6 +66,10 @@ public:
                                           config().particleHypothesisPdg,
                                           m_particleHypothesisPdg.m_description);
     AlgoT::makeParticleHypothesis(config().particleHypothesisPdg);
+    GetApplication()->SetDefaultParameter(GetPrefix() + ":" + m_refitSeedCovarianceScale.m_name,
+                                          config().refitSeedCovarianceScale,
+                                          m_refitSeedCovarianceScale.m_description);
+    AlgoT::validateRefitCovarianceScale(config().refitSeedCovarianceScale);
   }
 
   void Configure() {

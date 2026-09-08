@@ -51,6 +51,7 @@
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/TrackFinding/TrackStateCreator.hpp>
 #include <Acts/TrackFitting/GainMatrixUpdater.hpp>
+#include <Acts/TrackFitting/GainMatrixSmoother.hpp>
 #include <Acts/Utilities/Logger.hpp>
 #include <Acts/Utilities/TrackHelpers.hpp>
 #include <ActsExamples/EventData/GeometryContainers.hpp>
@@ -65,6 +66,7 @@
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
 #include <Eigen/Core>
+#include <Eigen/Cholesky>
 #include <Eigen/Geometry>
 #include <Eigen/LU> // IWYU pragma: keep
 // IWYU pragma: no_include <Acts/Utilities/detail/ContextType.hpp>
@@ -152,7 +154,14 @@ Acts::ParticleHypothesis CKFTracking::makeParticleHypothesis(int absolutePdg) {
   }
 }
 
+void CKFTracking::validateRefitCovarianceScale(double scale) {
+  if (!std::isfinite(scale) || (scale != 0.0 && scale < 1.0)) {
+    throw std::invalid_argument("RefitSeedCovarianceScale must be zero or finite and >=1");
+  }
+}
+
 void CKFTracking::init() {
+  validateRefitCovarianceScale(m_cfg.refitSeedCovarianceScale);
   m_particleHypothesis = makeParticleHypothesis(m_cfg.particleHypothesisPdg);
   m_acts_logger = Acts::getDefaultLogger(
       "CKF", eicrecon::SpdlogToActsLevel(static_cast<spdlog::level::level_enum>(this->level())));
@@ -188,6 +197,10 @@ void CKFTracking::init() {
   }
   m_trackFinderFunc = CKFTracking::makeCKFTrackingFunction(
       m_geoSvc->trackingGeometry(), m_geoSvc->getFieldProvider(), acts_logger());
+  if (m_cfg.refitSeedCovarianceScale > 0.0) {
+    m_trackFitterFunc = makeTrackFitterFunction(m_geoSvc->trackingGeometry(),
+                                                m_geoSvc->getFieldProvider(), acts_logger());
+  }
 }
 
 void CKFTracking::process(const Input& input, const Output& output) const {
@@ -255,6 +268,7 @@ void CKFTracking::process(const Input& input, const Output& output) const {
 
   EDM4eicMeasurementSourceLinkCalibrator calibratorImpl{meas2Ds};
   Acts::GainMatrixUpdater kfUpdater;
+  Acts::GainMatrixSmoother kfSmoother;
   Acts::MeasurementSelector measSel{m_sourcelinkSelectorCfg};
 
   Acts::CombinatorialKalmanFilterExtensions<ActsExamples::TrackContainer> extensions;
@@ -280,6 +294,20 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   // Set the CombinatorialKalmanFilter options
   CKFTracking::TrackFinderOptions options(gctx, mctx, cctx, extensions, pOptions);
 
+  ActsExamples::IndexSourceLinkSurfaceAccessor surfaceAccessor{*m_geoSvc->trackingGeometry()};
+  Acts::KalmanFitterExtensions<Acts::VectorMultiTrajectory> refitExtensions;
+  refitExtensions.surfaceAccessor
+      .connect<&ActsExamples::IndexSourceLinkSurfaceAccessor::operator()>(&surfaceAccessor);
+  refitExtensions.calibrator.connect<&EDM4eicMeasurementSourceLinkCalibrator::calibrate>(
+      &calibratorImpl);
+  refitExtensions.updater
+      .connect<&Acts::GainMatrixUpdater::operator()<Acts::VectorMultiTrajectory>>(&kfUpdater);
+  refitExtensions.smoother
+      .connect<&Acts::GainMatrixSmoother::operator()<Acts::VectorMultiTrajectory>>(&kfSmoother);
+  // Use the same material-aware extrapolator as the CKF below. The fitter's
+  // built-in reference-surface extrapolation has no MaterialInteractor actor.
+  TrackFitterOptions refitOptions(gctx, mctx, cctx, refitExtensions, pOptions);
+
   using Extrapolator        = Acts::Propagator<Acts::EigenStepper<>, Acts::Navigator>;
   using ExtrapolatorOptions = Extrapolator::template Options<
       Acts::ActorList<Acts::MaterialInteractor, Acts::EndOfWorldReached>>;
@@ -298,6 +326,11 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   auto trackContainerTemp      = std::make_shared<Acts::VectorTrackContainer>();
   auto trackStateContainerTemp = std::make_shared<Acts::VectorMultiTrajectory>();
   ActsExamples::TrackContainer acts_tracks_temp(trackContainerTemp, trackStateContainerTemp);
+
+  auto refitTrackContainer = std::make_shared<Acts::VectorTrackContainer>();
+  auto refitStateContainer = std::make_shared<Acts::VectorMultiTrajectory>();
+  ActsExamples::TrackContainer refittedTracks(refitTrackContainer, refitStateContainer);
+  refittedTracks.addColumn<unsigned int>("seed");
 
   // Add seed number column
   acts_tracks.addColumn<unsigned int>("seed");
@@ -346,6 +379,72 @@ void CKFTracking::process(const Input& input, const Output& output) const {
                 iseed, counts.stations, m_cfg.numB0StationsMin);
           continue;
         }
+      }
+
+      if (m_trackFitterFunc) {
+        // Freeze the finder's assignments and test reduced seed-prior weight.
+        // At finite scale the prior still depends on these measurements;
+        // validate parameter/covariance convergence before choosing a scale.
+        std::vector<Acts::SourceLink> assigned;
+        for (const auto& state : track.trackStatesReversed()) {
+#if Acts_VERSION_MAJOR >= 45
+          const bool measurement = state.typeFlags().isMeasurement();
+#else
+          const bool measurement = state.typeFlags().test(Acts::TrackStateFlag::MeasurementFlag);
+#endif
+          if (measurement && state.hasUncalibratedSourceLink()) {
+            assigned.push_back(state.getUncalibratedSourceLink());
+          }
+        }
+        std::ranges::reverse(assigned);
+        const auto& initial = acts_init_trk_params.at(iseed);
+        auto weakCovariance = initial.covariance().value() * m_cfg.refitSeedCovarianceScale;
+        if (!weakCovariance.allFinite()) {
+          warning("Rejecting overflowing assigned-hit refit prior for seed {}", iseed);
+          continue;
+        }
+        ActsExamples::TrackParameters weakInitial(initial.referenceSurface().getSharedPtr(),
+                                                  initial.parameters(), weakCovariance,
+                                                  m_particleHypothesis);
+        refittedTracks.clear();
+        auto refit = (*m_trackFitterFunc)(assigned, weakInitial, refitOptions, refittedTracks);
+        if (!refit.ok()) {
+          debug("Assigned-hit refit failed for seed {}: {}", iseed, refit.error().message());
+          continue;
+        }
+        auto fitted = refit.value();
+        if (fitted.nMeasurements() != assigned.size()) {
+          debug("Assigned-hit refit for seed {} retained {} of {} measurements", iseed,
+                fitted.nMeasurements(), assigned.size());
+          continue;
+        }
+        auto referenceResult = Acts::extrapolateTrackToReferenceSurface(
+            fitted, *pSurface, extrapolator, extrapolationOptions,
+            Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+        if (!referenceResult.ok()) {
+          debug("Assigned-hit refit extrapolation failed for seed {}: {}", iseed,
+                referenceResult.error().message());
+          continue;
+        }
+        const auto fittedCovariance = fitted.covariance().eval();
+        if (!fitted.parameters().allFinite() || fitted.parameters()[Acts::eBoundQOverP] == 0.0 ||
+            !fittedCovariance.allFinite() || (fittedCovariance.diagonal().array() <= 0.0).any()) {
+          warning("Rejecting non-finite assigned-hit refit or invalid covariance for seed {}",
+                  iseed);
+          continue;
+        }
+        const auto inverseSigma = fittedCovariance.diagonal().array().sqrt().inverse().matrix();
+        const auto correlation =
+            (inverseSigma.asDiagonal() * fittedCovariance * inverseSigma.asDiagonal()).eval();
+        if (correlation.llt().info() != Eigen::Success) {
+          warning("Rejecting indefinite assigned-hit refit covariance for seed {} at scale {}",
+                  iseed, m_cfg.refitSeedCovarianceScale);
+          continue;
+        }
+        seedNumber(fitted) = iseed;
+        auto destination   = acts_tracks.makeTrack();
+        destination.copyFrom(fitted);
+        continue;
       }
 
       auto smoothingResult = Acts::smoothTrack(gctx, track, acts_logger());

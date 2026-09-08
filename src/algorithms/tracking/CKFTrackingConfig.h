@@ -16,6 +16,11 @@ struct CKFTrackingConfig {
   // Supported charged species: 11, 13, 211, 321, 2212. Charge sign comes from q/p.
   int particleHypothesisPdg = 211;
 
+  // Optional assigned-hit Kalman refit after finding. Zero preserves the finder
+  // result; >=1 scales the seed covariance for the refit only, leaving candidate
+  // finding unchanged. Validate convergence before treating this as a weak prior.
+  double refitSeedCovarianceScale = 0.0;
+
   std::size_t numMeasurementsMin = 4;
   // Disabled for central tracking; B0 requires independent physical stations.
   std::size_t numB0StationsMin = 0;
