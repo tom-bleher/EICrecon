@@ -822,3 +822,33 @@ TEST_CASE("B0 beam-spot covariance is dominated by the longitudinal term",
   REQUIRE(solver.info() == Eigen::Success);
   CHECK(solver.eigenvalues().minCoeff() >= Approx(0.0).margin(1e-12));
 }
+
+TEST_CASE("B0 replay resolves original hit identity through a shuffled subset",
+          "[B0TrackerStubSeeder]") {
+  edm4eic::TrackerHitCollection hits;
+  hits.setID(0xF0000001U); // Exercise the unsigned high bit in collection identity.
+  for (int i = 0; i < 3; ++i) {
+    hits.create();
+  }
+  edm4eic::TrackerHitCollection subset;
+  subset.setSubsetCollection(true);
+  subset.push_back(hits[2]);
+  subset.push_back(hits[0]);
+  const auto indices =
+      eicrecon::b0stub::resolveHitObjectIDs(subset, {hits[0].getObjectID(), hits[2].getObjectID()});
+  CHECK(indices == std::vector<std::size_t>{1, 0});
+  CHECK_THROWS_AS(eicrecon::b0stub::resolveHitObjectIDs(subset, {hits[1].getObjectID()}),
+                  std::invalid_argument);
+  CHECK_THROWS_AS(
+      eicrecon::b0stub::resolveHitObjectIDs(subset, {hits[0].getObjectID(), hits[0].getObjectID()}),
+      std::invalid_argument);
+  auto missing  = hits[0].getObjectID();
+  missing.index = -1;
+  CHECK_THROWS_AS(eicrecon::b0stub::resolveHitObjectIDs(subset, {missing}), std::invalid_argument);
+  missing = hits[0].getObjectID();
+  missing.collectionID ^= 0x40000000U;
+  CHECK_THROWS_AS(eicrecon::b0stub::resolveHitObjectIDs(subset, {missing}), std::invalid_argument);
+  subset.push_back(hits[0]);
+  CHECK_THROWS_AS(eicrecon::b0stub::resolveHitObjectIDs(subset, {hits[2].getObjectID()}),
+                  std::invalid_argument);
+}

@@ -56,6 +56,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -713,6 +714,46 @@ namespace b0stub {
     return {inferredCharge};
   }
 
+  std::vector<std::size_t> resolveHitObjectIDs(const edm4eic::TrackerHitCollection& hits,
+                                               const std::vector<podio::ObjectID>& ids) {
+    std::map<std::pair<std::uint32_t, int>, std::size_t> found;
+    std::size_t i = 0;
+    for (const auto& hit : hits) {
+      const auto oid = hit.getObjectID();
+      const auto key = std::make_pair(oid.collectionID, oid.index);
+      if (!found.emplace(key, i).second) {
+        throw std::invalid_argument("B0TrackerStubSeeder: duplicate ObjectID in hit collection (" +
+                                    std::to_string(oid.collectionID) + ", " +
+                                    std::to_string(oid.index) + ")");
+      }
+      ++i;
+    }
+    std::vector<std::size_t> out;
+    out.reserve(ids.size());
+    std::set<std::pair<std::uint32_t, int>> seen;
+    for (const auto& id : ids) {
+      if (id.index < 0) {
+        throw std::invalid_argument("B0TrackerStubSeeder: unavailable hit ObjectID (" +
+                                    std::to_string(id.collectionID) + ", " +
+                                    std::to_string(id.index) + ")");
+      }
+      const auto key = std::make_pair(id.collectionID, id.index);
+      if (!seen.insert(key).second) {
+        throw std::invalid_argument("B0TrackerStubSeeder: duplicate hit ObjectID in candidate (" +
+                                    std::to_string(id.collectionID) + ", " +
+                                    std::to_string(id.index) + ")");
+      }
+      const auto it = found.find(key);
+      if (it == found.end()) {
+        throw std::invalid_argument("B0TrackerStubSeeder: unresolved hit ObjectID (" +
+                                    std::to_string(id.collectionID) + ", " +
+                                    std::to_string(id.index) + ")");
+      }
+      out.push_back(it->second);
+    }
+    return out;
+  }
+
 } // namespace b0stub
 
 void B0TrackerStubSeeder::init() {
@@ -838,8 +879,28 @@ void B0TrackerStubSeeder::init() {
 }
 
 void B0TrackerStubSeeder::process(const Input& input, const Output& output) const {
+  processImpl(input, output, nullptr);
+}
+
+void B0TrackerStubSeeder::process(
+    const Input& input, const Output& output,
+    const std::vector<std::vector<podio::ObjectID>>& candidates) const {
+  processImpl(input, output, &candidates);
+}
+
+void B0TrackerStubSeeder::processImpl(
+    const Input& input, const Output& output,
+    const std::vector<std::vector<podio::ObjectID>>* external) const {
   const auto [hits]                 = input;
   auto [seeds, track_params_output] = output;
+
+  std::vector<std::vector<std::size_t>> resolvedExternal;
+  if (external != nullptr) {
+    resolvedExternal.reserve(external->size());
+    for (const auto& ids : *external) {
+      resolvedExternal.push_back(b0stub::resolveHitObjectIDs(*hits, ids));
+    }
+  }
 
   if (!m_enabled || hits->empty()) {
     return;
@@ -871,6 +932,8 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   ionHits.reserve(hits->size());
   std::vector<std::uint64_t> ionVolumes;
   ionVolumes.reserve(hits->size());
+  std::vector<int> collectionToIon(hits->size(), -1);
+  std::size_t collectionIndex = 0;
 
   for (const auto& hit : *hits) {
     const auto& p          = hit.getPosition();
@@ -888,11 +951,16 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                            .varianceY = covariance.yy};
     if (!(std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z))) {
       debug("Skipping B0 hit with non-finite position");
+      ++collectionIndex;
       continue;
+    }
+    if (collectionIndex < collectionToIon.size()) {
+      collectionToIon[collectionIndex] = static_cast<int>(ion.size());
     }
     ion.push_back(q);
     ionHits.push_back(hit);
     ionVolumes.push_back(volumeId);
+    ++collectionIndex;
   }
   if (ion.empty()) {
     return;
@@ -929,6 +997,12 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     std::ranges::sort(indices, [&](std::size_t a, std::size_t b) {
       return std::tie(ion[a].x, ion[a].y, ion[a].z) < std::tie(ion[b].x, ion[b].y, ion[b].z);
     });
+  }
+  std::vector<int> ionStation(ion.size(), -1);
+  for (const auto& [stationIndex, indices] : byStation) {
+    for (const std::size_t idx : indices) {
+      ionStation[idx] = static_cast<int>(stationIndex);
+    }
   }
 
   // The auxiliary and field-integral fits need >= 3 points, so 3 stations is the hard floor
@@ -1110,6 +1184,122 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     }
     return true;
   };
+
+  auto emitCandidate = [&](const StubCandidate& cand, unsigned int& emitted, unsigned int seedCap) {
+    if (emitted >= seedCap) {
+      return;
+    }
+    const SeedVector state =
+        seedStateFromFit(cand.bendFit, cand.fit, m_crossing_angle, m_cfg.constrainToBeamline);
+    const SeedMatrix fitCovariance =
+        propagateFitCovariance(cand.bendFit, cand.fit, m_crossing_angle, m_cfg.constrainToBeamline);
+
+    const std::vector<int> charges =
+        b0stub::chargeHypotheses(cand.qOverP, cand.qOverPVariance, m_cfg.minCurvatureSignificance,
+                                 cand.inferredCharge, m_cfg.testBothCharges, m_cfg.charge);
+
+    for (const int charge : charges) {
+      if (emitted >= seedCap) {
+        break;
+      }
+      const double emittedQOverP = charge * std::abs(cand.qOverP);
+      const double qOverPSign    = cand.qOverP == 0.0 ? 1.0 : emittedQOverP / cand.qOverP;
+      SeedMatrix covariance      = fitCovariance;
+      covariance.row(4) *= qOverPSign;
+      covariance.col(4) *= qOverPSign;
+
+      // The constrained seed assumes the origin; the interaction-vertex
+      // spread is an uncertainty on the parameters it reports.
+      const auto beamSpot = b0stub::beamSpotCovarianceAdditions(
+          cand.bendFit, cand.fit, m_crossing_angle, m_cfg.constrainToBeamline, m_cfg.beamSpotSizeX,
+          m_cfg.beamSpotSizeY, m_cfg.beamSpotSizeZ);
+      const std::array<double, 5> fallbackVariances{m_cfg.locaVariance, m_cfg.locbVariance,
+                                                    m_cfg.phiVariance, m_cfg.thetaVariance,
+                                                    m_cfg.qOverPVariance};
+      std::array<double, 25> signedFitCovariance{};
+      Eigen::Map<RowMajor5>(signedFitCovariance.data()) = covariance;
+      const auto combined =
+          b0stub::seedCovarianceWithFallbacks(signedFitCovariance, beamSpot, fallbackVariances);
+      covariance            = Eigen::Map<const RowMajor5>(combined.data());
+      const auto scattering = b0stub::scatteringCovarianceAdditions(
+          emittedQOverP, state(3), m_cfg.scatteringScale, m_cfg.qOverPRelativeUncertainty);
+      covariance(2, 2) += scattering[0];
+      covariance(3, 3) += scattering[1];
+      covariance(4, 4) += scattering[2];
+
+      auto trackparam = track_params_output->create();
+      trackparam.setType(-1); // seed
+      trackparam.setLoc({static_cast<float>(state(0)), static_cast<float>(state(1))});
+      trackparam.setPhi(static_cast<float>(state(2)));
+      trackparam.setTheta(static_cast<float>(state(3)));
+      trackparam.setQOverP(static_cast<float>(emittedQOverP));
+      trackparam.setTime(0.0F); // vertex time at the origin perigee
+
+      edm4eic::Cov6f cov;
+      for (int row = 0; row < 5; ++row) {
+        for (int col = row; col < 5; ++col) {
+          cov(row, col) = static_cast<float>(covariance(row, col));
+        }
+      }
+      cov(5, 5) = m_cfg.timeVariance;
+      trackparam.setCovariance(cov);
+
+      auto seed = seeds->create();
+      seed.setPerigee({0.F, 0.F, 0.F});
+      // Larger is better for ACTS seed quality; use the negative mean residual.
+      seed.setQuality(
+          static_cast<float>(-(cand.fit.rmsX * cand.fit.rmsX + cand.fit.rmsY * cand.fit.rmsY)));
+      seed.setParams(trackparam);
+      for (std::size_t idx : cand.hitIndices) {
+        seed.addToHits(ionHits[idx]);
+      }
+      ++emitted;
+
+      trace("B0 stub seed: q={} q/p={:.5f} 1/GeV theta={:.4f} phi={:.3f} "
+            "loc=({:.2f},{:.2f}) rms=({:.3f},{:.3f})",
+            charge, emittedQOverP, state(3), state(2), state(0), state(1), cand.fit.rmsX,
+            cand.fit.rmsY);
+    }
+  };
+
+  if (external != nullptr) {
+    unsigned int emitted = 0;
+    for (const auto& collectionIdx : resolvedExternal) {
+      std::vector<std::size_t> ionIdxs;
+      ionIdxs.reserve(collectionIdx.size());
+      std::set<int> stations;
+      bool ok = true;
+      for (const std::size_t ci : collectionIdx) {
+        if (ci >= collectionToIon.size() || collectionToIon[ci] < 0) {
+          ok = false;
+          break;
+        }
+        const auto ionIdx = static_cast<std::size_t>(collectionToIon[ci]);
+        const int station = ionStation[ionIdx];
+        if (station < 0 || !stations.insert(station).second) {
+          ok = false;
+          break;
+        }
+        ionIdxs.push_back(ionIdx);
+      }
+      if (!ok || ionIdxs.size() < minStations) {
+        debug("Skipping external B0 candidate that fails native station/geometry checks");
+        continue;
+      }
+      std::vector<b0stub::Point3> pts;
+      pts.reserve(ionIdxs.size());
+      for (const std::size_t idx : ionIdxs) {
+        pts.push_back(ion[idx]);
+      }
+      StubCandidate cand;
+      cand.hitIndices = std::move(ionIdxs);
+      cand.fit        = b0stub::fitStub(pts);
+      if (makeCompatible(cand)) {
+        emitCandidate(cand, emitted, std::numeric_limits<unsigned int>::max());
+      }
+    }
+    return;
+  }
 
   unsigned int truncated        = 0;
   unsigned int endpointPairs    = 0;
@@ -1321,80 +1511,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // ------------------------------------------------------------------
   unsigned int emitted = 0;
   for (const auto* cand : accepted) {
-    if (emitted >= m_cfg.maxSeeds) {
-      break;
-    }
-    const SeedVector state =
-        seedStateFromFit(cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline);
-    const SeedMatrix fitCovariance = propagateFitCovariance(
-        cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline);
-
-    const std::vector<int> charges =
-        b0stub::chargeHypotheses(cand->qOverP, cand->qOverPVariance, m_cfg.minCurvatureSignificance,
-                                 cand->inferredCharge, m_cfg.testBothCharges, m_cfg.charge);
-
-    for (const int charge : charges) {
-      if (emitted >= m_cfg.maxSeeds) {
-        break;
-      }
-      const double emittedQOverP = charge * std::abs(cand->qOverP);
-      const double qOverPSign    = cand->qOverP == 0.0 ? 1.0 : emittedQOverP / cand->qOverP;
-      SeedMatrix covariance      = fitCovariance;
-      covariance.row(4) *= qOverPSign;
-      covariance.col(4) *= qOverPSign;
-
-      // The constrained seed assumes the origin; the interaction-vertex
-      // spread is an uncertainty on the parameters it reports.
-      const auto beamSpot = b0stub::beamSpotCovarianceAdditions(
-          cand->bendFit, cand->fit, m_crossing_angle, m_cfg.constrainToBeamline,
-          m_cfg.beamSpotSizeX, m_cfg.beamSpotSizeY, m_cfg.beamSpotSizeZ);
-      const std::array<double, 5> fallbackVariances{m_cfg.locaVariance, m_cfg.locbVariance,
-                                                    m_cfg.phiVariance, m_cfg.thetaVariance,
-                                                    m_cfg.qOverPVariance};
-      std::array<double, 25> signedFitCovariance{};
-      Eigen::Map<RowMajor5>(signedFitCovariance.data()) = covariance;
-      const auto combined =
-          b0stub::seedCovarianceWithFallbacks(signedFitCovariance, beamSpot, fallbackVariances);
-      covariance            = Eigen::Map<const RowMajor5>(combined.data());
-      const auto scattering = b0stub::scatteringCovarianceAdditions(
-          emittedQOverP, state(3), m_cfg.scatteringScale, m_cfg.qOverPRelativeUncertainty);
-      covariance(2, 2) += scattering[0];
-      covariance(3, 3) += scattering[1];
-      covariance(4, 4) += scattering[2];
-
-      auto trackparam = track_params_output->create();
-      trackparam.setType(-1); // seed
-      trackparam.setLoc({static_cast<float>(state(0)), static_cast<float>(state(1))});
-      trackparam.setPhi(static_cast<float>(state(2)));
-      trackparam.setTheta(static_cast<float>(state(3)));
-      trackparam.setQOverP(static_cast<float>(emittedQOverP));
-      trackparam.setTime(0.0F); // vertex time at the origin perigee
-
-      edm4eic::Cov6f cov;
-      for (int row = 0; row < 5; ++row) {
-        for (int col = row; col < 5; ++col) {
-          cov(row, col) = static_cast<float>(covariance(row, col));
-        }
-      }
-      cov(5, 5) = m_cfg.timeVariance;
-      trackparam.setCovariance(cov);
-
-      auto seed = seeds->create();
-      seed.setPerigee({0.F, 0.F, 0.F});
-      // Larger is better for ACTS seed quality; use the negative mean residual.
-      seed.setQuality(
-          static_cast<float>(-(cand->fit.rmsX * cand->fit.rmsX + cand->fit.rmsY * cand->fit.rmsY)));
-      seed.setParams(trackparam);
-      for (std::size_t idx : cand->hitIndices) {
-        seed.addToHits(ionHits[idx]);
-      }
-      ++emitted;
-
-      trace("B0 stub seed: q={} q/p={:.5f} 1/GeV theta={:.4f} phi={:.3f} "
-            "loc=({:.2f},{:.2f}) rms=({:.3f},{:.3f})",
-            charge, emittedQOverP, state(3), state(2), state(0), state(1), cand->fit.rmsX,
-            cand->fit.rmsY);
-    }
+    emitCandidate(*cand, emitted, m_cfg.maxSeeds);
   }
 }
 

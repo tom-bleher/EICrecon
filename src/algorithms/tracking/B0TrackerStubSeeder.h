@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <podio/ObjectID.h>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -217,6 +218,14 @@ namespace b0stub {
                                     double minCurvatureSignificance, int inferredCharge,
                                     bool testBothCharges, int configuredCharge);
 
+  /// Iteration indices of `ids` in `hits`, matched by ObjectID, not array position.
+  /// Throws std::invalid_argument on unavailable (`index < 0`), unresolved, or
+  /// duplicate IDs in `ids`, and on a collection that contains the same ObjectID
+  /// twice. An unassigned collection ID is an unsigned sentinel; it is compared
+  /// as part of the identity rather than interpreted as an array position.
+  std::vector<std::size_t> resolveHitObjectIDs(const edm4eic::TrackerHitCollection& hits,
+                                               const std::vector<podio::ObjectID>& ids);
+
 } // namespace b0stub
 
 using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
@@ -241,8 +250,20 @@ public:
 
   void init() final;
   void process(const Input&, const Output&) const final;
+  /// Replay externally ordered candidates through the native estimator and
+  /// covariance path. `candidates` are hit ObjectIDs resolved against the
+  /// original input collection. Invalid or duplicate IDs throw. Native
+  /// station/geometry/estimator checks still apply; failing candidates are
+  /// not emitted. Search policy (combinatorics, ranking, overlap, maxSeeds)
+  /// is not reapplied: external order is preserved. Charge hypotheses are
+  /// expanded normally; callers replaying emitted seeds must deduplicate exact
+  /// ordered hit tuples first.
+  void process(const Input&, const Output&,
+               const std::vector<std::vector<podio::ObjectID>>& candidates) const;
 
 private:
+  void processImpl(const Input&, const Output&,
+                   const std::vector<std::vector<podio::ObjectID>>* external) const;
   std::shared_ptr<const ActsGeometryProvider> m_acts_context;
   double m_crossing_angle{};
   double m_z_field_entrance{};
