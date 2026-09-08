@@ -43,6 +43,12 @@ Invalid covariance matrices remain counted; storage-roundoff-limited matrices
 are identified without clamping. JSON retains full precision; percentiles use
 NumPy's linear interpolation.
 
+Each summary and phase-space bin also reports matched-proton momentum bias,
+central 68% half-width, wrong-charge counts, and absolute residual tails above
+20% and 100%. These are diagnostics, not cuts. Momentum residuals compare
+`1/abs(q/p)` with generated proton momentum, so material transport can contribute.
+Zero/nonfinite q/p remains counted separately; finite outliers are never clipped.
+
 ## Assigned-hit refit experiment
 
 `tracking:B0TrackerCKFTrajectories:RefitSeedCovarianceScale` defaults to **0**

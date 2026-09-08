@@ -373,6 +373,36 @@ def analyze(path, prefix, layers_per_station, threshold_keV, crossing_angle, suf
     return dict(input=str(path), events=events, upstream_hashes=hashes, rows=rows, tracks=track_rows)
 
 
+def momentum_quality(rows):
+    """Audit matched accepted protons without choosing a truth-nearest candidate.
+
+    Charge is unit magnitude for this benchmark's generated protons. Zero or
+    invalid fitted q/p is counted explicitly; finite large tails are not clipped.
+    """
+    import numpy as np
+    matched = [r for r in rows if r['stations'] >= 3 and r['matched']]
+    residuals, wrong_sign, invalid = [], 0, 0
+    for row in matched:
+        qop = row['track']['parameters'][4]
+        truth_qop = row['truth'][4]
+        if qop is None or not math.isfinite(qop) or qop == 0:
+            invalid += 1
+            continue
+        wrong_sign += qop * truth_qop < 0
+        residuals.append(100 * (abs(truth_qop / qop) - 1))
+    quantiles = np.percentile(residuals, [16, 50, 84]).tolist() if residuals else None
+    return dict(matched_protons=len(matched), finite_momentum=len(residuals),
+                invalid_or_zero_qop=invalid, wrong_charge=int(wrong_sign),
+                correct_charge=len(residuals) - int(wrong_sign),
+                momentum_residual_percent=(dict(zip(('p16', 'median', 'p84'), quantiles))
+                                           if quantiles else None),
+                momentum_central68_halfwidth_percent=((quantiles[2] - quantiles[0]) / 2
+                                                      if quantiles else None),
+                momentum_abs_residual_gt20_percent=sum(abs(x) > 20 for x in residuals),
+                momentum_abs_residual_gt100_percent=sum(abs(x) > 100 for x in residuals),
+                momentum_max_abs_residual_percent=max(map(abs, residuals), default=None))
+
+
 def summarize(rows, tracks=None):
     import numpy as np
     accepted = [r for r in rows if r['stations'] >= 3]
@@ -387,6 +417,7 @@ def summarize(rows, tracks=None):
                qop_residual_valid=sum(t['qop_residual_percent'] is not None for t in matched),
                qop_residual_percent=distribution([t['qop_residual_percent'] for t in matched
                                                    if t['qop_residual_percent'] is not None]))
+    out['momentum_quality'] = momentum_quality(rows)
     if tracks is not None:
         counts = defaultdict(int)
         for tr in tracks:
@@ -491,6 +522,7 @@ def main():
     results['definitions'] = dict(acceptance=ACCEPTANCE_DEFINITION, matching=MATCHING_DEFINITION,
         covariance='Full 5D origin-perigee pulls; chi-square(5) 95% threshold 11.070497693516351. Float32 normalized eigenvalue guard; invalid retained in counts.',
         fake='Track without >=0.5 direct-primary-proton purity, not generic charged-track fake rate.',
+        momentum='Matched accepted protons only; 100*(p_reco/p_truth-1), p=1/abs(q/p). Wrong charge counted separately; zero/nonfinite q/p counted invalid. Tail thresholds are diagnostics, not selection cuts. Truth momentum is at generation; transport/material can contribute to residuals.',
         precision='JSON full floating-point precision; percentiles NumPy linear; units mm,rad,GeV; q/p residual percent.',
         options={k: str(v) if isinstance(v, Path) else v for k,v in vars(args).items()})
     if args.provenance:

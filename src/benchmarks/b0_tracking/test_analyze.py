@@ -254,5 +254,29 @@ class NumericalTests(unittest.TestCase):
         self.assertEqual(covariance_metrics(packed, fitted)['covariance_status'], 'nonfinite')
 
 
+
+
+class MomentumQualityTests(unittest.TestCase):
+    def test_charge_tails_and_invalid_are_not_hidden(self):
+        from analyze import momentum_quality
+        rows = [dict(stations=3, matched=True, truth=[0, 0, 0, 0, .025],
+                     track=dict(parameters=[0, 0, 0, 0, qop]))
+                for qop in (.025, -.00125, 0, None)]
+        rows.append(dict(stations=2, matched=True, truth=[0, 0, 0, 0, .025],
+                         track=dict(parameters=[0, 0, 0, 0, -.025])))
+        result = momentum_quality(rows)
+        self.assertEqual(result['matched_protons'], 4)
+        self.assertEqual(result['wrong_charge'], 1)
+        self.assertEqual(result['correct_charge'], 1)
+        self.assertEqual(result['invalid_or_zero_qop'], 2)
+        self.assertEqual(result['momentum_abs_residual_gt100_percent'], 1)
+        self.assertAlmostEqual(result['momentum_max_abs_residual_percent'], 1900)
+        self.assertAlmostEqual(result['momentum_residual_percent']['median'], 950)
+
+    def test_empty_acceptance(self):
+        from analyze import momentum_quality
+        self.assertIsNone(momentum_quality([])['momentum_residual_percent'])
+
+
 if __name__ == '__main__':
     unittest.main()
