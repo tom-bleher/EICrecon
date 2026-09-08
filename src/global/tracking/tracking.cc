@@ -325,9 +325,10 @@ void InitPlugin(JApplication* app) {
           // Keep the B0 telescope exception of three measurements. The chi2 cut
           // is loosened from the framework default (15) for the same reason as
           // the stub-seeded chain below.
-          .chi2CutOff         = {50.},
-          .numMeasurementsMin = 3,
-          .numB0StationsMin   = 3,
+          .chi2CutOff            = {50.},
+          .particleHypothesisPdg = 2212,
+          .numMeasurementsMin    = 3,
+          .numB0StationsMin      = 3,
       },
       app));
 
@@ -401,9 +402,10 @@ void InitPlugin(JApplication* app) {
           // cost (50 / 100 / 300 give 83.1 / 83.9 / 84.7 % against 80.9 %).
           // Provisional: the fake-rate side has only been checked on DVCS, not
           // on a beam-gas or synchrotron background overlay.
-          .chi2CutOff         = {50.},
-          .numMeasurementsMin = 3,
-          .numB0StationsMin   = 3,
+          .chi2CutOff            = {50.},
+          .particleHypothesisPdg = 2212,
+          .numMeasurementsMin    = 3,
+          .numB0StationsMin      = 3,
       },
       app));
 
