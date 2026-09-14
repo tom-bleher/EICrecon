@@ -68,6 +68,19 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       m_acts_provider->setObjWriteIt(objWriteIt);
       m_acts_provider->setPlyWriteIt(plyWriteIt);
 
+      double layerEnvelopeR = m_acts_provider->getLayerEnvelopeR();
+      double layerEnvelopeZ = m_acts_provider->getLayerEnvelopeZ();
+      m_app->SetDefaultParameter("acts:LayerEnvelopeR", layerEnvelopeR,
+                                 "Radial pad added to the bounds of each subdetector tracking "
+                                 "volume beyond its outermost layers [mm]");
+      m_app->SetDefaultParameter("acts:LayerEnvelopeZ", layerEnvelopeZ,
+                                 "Longitudinal pad added to the z bounds of each subdetector "
+                                 "tracking volume beyond its outermost layers [mm]; must cover "
+                                 "r*tan(tilt) of layers tilted off the beam axis and stay below "
+                                 "half the z gap to the neighbouring volume");
+      m_acts_provider->setLayerEnvelopeR(layerEnvelopeR);
+      m_acts_provider->setLayerEnvelopeZ(layerEnvelopeZ);
+
       std::string outputTag = m_acts_provider->getOutputTag();
       std::string outputDir = m_acts_provider->getOutputDir();
       m_app->SetDefaultParameter("acts:OutputTag", outputTag, "Obj and ply output file tag");

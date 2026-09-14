@@ -165,8 +165,8 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
   Acts::BinningType bTypePhi   = Acts::equidistant;
   Acts::BinningType bTypeR     = Acts::equidistant;
   Acts::BinningType bTypeZ     = Acts::equidistant;
-  double layerEnvelopeR        = Acts::UnitConstants::mm;
-  double layerEnvelopeZ        = Acts::UnitConstants::mm;
+  double layerEnvelopeR        = m_layerEnvelopeR * Acts::UnitConstants::mm;
+  double layerEnvelopeZ        = m_layerEnvelopeZ * Acts::UnitConstants::mm;
   double defaultLayerThickness = Acts::UnitConstants::fm;
 
   try {
