@@ -25,8 +25,8 @@ void InitPlugin(JApplication* app) {
       "B0TrackerRawHits", {"EventHeader", "B0TrackerHits"},
       {"B0TrackerRawHits", "B0TrackerRawHitLinks", "B0TrackerRawHitAssociations"},
       {
-          // Match the central silicon threshold for the 50 um B0 sensor.
-          .threshold      = 0.54 * dd4hep::keV,
+          // ~0.5 MIP in the 50 um AC-LGAD; same cut as official B0/RP/OMD.
+          .threshold      = 10.0 * dd4hep::keV,
           .timeResolution = 30 * edm4eic::unit::ps,
       },
       app));
