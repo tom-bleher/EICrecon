@@ -17,6 +17,10 @@
 #include <Acts/Geometry/GeometryHierarchyMap.hpp>
 #include <Acts/TrackFinding/CombinatorialKalmanFilterExtensions.hpp>
 #include <Acts/Utilities/CalibrationContext.hpp>
+#include <DD4hep/Detector.h>
+#include <Evaluator/DD4hepUnits.h>
+#include <cmath>
+#include <stdexcept>
 #include <spdlog/common.h>
 #include <algorithm>
 #include <any>
@@ -129,8 +133,28 @@ namespace eicrecon {
 
 using namespace Acts::UnitLiterals;
 
+Acts::ParticleHypothesis CKFTracking::makeParticleHypothesis(int absolutePdg) {
+  switch (absolutePdg) {
+  case 11:
+    return Acts::ParticleHypothesis::electron();
+  case 13:
+    return Acts::ParticleHypothesis::muon();
+  case 211:
+    return Acts::ParticleHypothesis::pion();
+  case 321:
+    return Acts::ParticleHypothesis::kaon();
+  case 2212:
+    return Acts::ParticleHypothesis::proton();
+  default:
+    throw std::invalid_argument("ParticleHypothesisPdg must be one of the positive absolute PDGs "
+                                "11, 13, 211, 321, 2212; got " +
+                                std::to_string(absolutePdg));
+  }
+}
+
 void CKFTracking::init() {
-  m_acts_logger = Acts::getDefaultLogger(
+  m_particleHypothesis = makeParticleHypothesis(m_cfg.particleHypothesisPdg);
+  m_acts_logger        = Acts::getDefaultLogger(
       "CKF", eicrecon::SpdlogToActsLevel(static_cast<spdlog::level::level_enum>(this->level())));
 
   // eta bins, chi2 and #sourclinks per surface cutoffs
@@ -141,6 +165,27 @@ void CKFTracking::init() {
         .numMeasurementsCutOff = {m_cfg.numMeasurementsCutOff.begin(),
                                   m_cfg.numMeasurementsCutOff.end()}}},
   };
+  if (m_cfg.numB0StationsMin > 0) {
+    if (!(m_cfg.b0StationZGap > 0.0) || !std::isfinite(m_cfg.b0StationZGap)) {
+      throw std::invalid_argument("B0StationZGap must be finite and positive");
+    }
+    const auto* detector  = m_geoSvc->dd4hepDetector();
+    const auto detectorId = detector->constant<unsigned long>("B0Tracker_Station_1_ID") & 0xff;
+    const double angle    = detector->constant<double>("CrossingAngle") / dd4hep::rad;
+    std::vector<std::pair<std::uint64_t, double>> surfaceZ;
+    for (const auto& [volumeId, surface] : m_geoSvc->surfaceMap()) {
+      if (surface == nullptr || surface->geometryId().sensitive() == 0 ||
+          surface->geometryId().extra() != detectorId) {
+        continue;
+      }
+      const auto center = surface->center(m_geoSvc->getActsGeometryContext());
+      const double z =
+          (center.x() * std::sin(angle) + center.z() * std::cos(angle)) / Acts::UnitConstants::mm;
+      surfaceZ.emplace_back(surface->geometryId().value(), z);
+    }
+    m_b0SurfaceStations = makeB0SurfaceStationMap(surfaceZ, m_cfg.b0StationZGap);
+    debug("Cached physical stations for {} B0 sensor surfaces", m_b0SurfaceStations.size());
+  }
   m_trackFinderFunc = CKFTracking::makeCKFTrackingFunction(
       m_geoSvc->trackingGeometry(), m_geoSvc->getFieldProvider(), acts_logger());
 }
@@ -189,7 +234,7 @@ void CKFTracking::process(const Input& input, const Output& output) const {
     auto pSurface = Acts::Surface::makeShared<const Acts::PerigeeSurface>(Acts::Vector3(0, 0, 0));
 
     // Create parameters
-    acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
+    acts_init_trk_params.emplace_back(pSurface, params, cov, m_particleHypothesis);
   }
 
   //// Construct a perigee surface as the target surface
@@ -288,6 +333,19 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         trace("Track {} for seed {} has fewer measurements than minimum of {}, skipping",
               track.index(), iseed, m_cfg.numMeasurementsMin);
         continue;
+      }
+
+      if (m_cfg.numB0StationsMin > 0) {
+        const auto counts = countB0TrackStations(track, m_b0SurfaceStations);
+        if (counts.unmappedMeasurements > 0) {
+          warning("Track {} for seed {} has {} fitted measurements without a B0 station",
+                  track.index(), iseed, counts.unmappedMeasurements);
+        }
+        if (counts.stations < m_cfg.numB0StationsMin) {
+          debug("Track {} for seed {} has {} B0 stations, fewer than required {}", track.index(),
+                iseed, counts.stations, m_cfg.numB0StationsMin);
+          continue;
+        }
       }
 
       auto smoothingResult = Acts::smoothTrack(gctx, track, acts_logger());

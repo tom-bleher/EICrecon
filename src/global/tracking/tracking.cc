@@ -32,6 +32,7 @@
 #include "factories/tracking/ActsToTracks_factory.h"
 #include "factories/tracking/ActsTrackMerger_factory.h"
 #include "factories/tracking/AmbiguitySolver_factory.h"
+#include "factories/tracking/B0TrackerStubSeeder_factory.h"
 #include "factories/tracking/CKFTracking_factory.h"
 #include "factories/tracking/IterativeVertexFinder_factory.h"
 #include "factories/tracking/SecondaryVertexFinder_factory.h"
@@ -321,7 +322,13 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFTruthSeededActsTracksUnfiltered",
       },
       {
-          .numMeasurementsMin = 3,
+          // Keep the B0 telescope exception of three measurements. The chi2 cut
+          // is loosened from the framework default (15) for the same reason as
+          // the stub-seeded chain below.
+          .chi2CutOff            = {50.},
+          .particleHypothesisPdg = 2212,
+          .numMeasurementsMin    = 3,
+          .numB0StationsMin      = 3,
       },
       app));
 
@@ -374,7 +381,10 @@ void InitPlugin(JApplication* app) {
       },
       app));
 
-  app->Add(new JOmniFactoryGeneratorT<TrackSeeding_factory>(
+  // Orthogonal (solenoid) seeding cannot form valid B0 seeds: hits sit at
+  // z ~ 6 m, outside the central-tracker windows, and the helix estimator
+  // assumes Bz. Use a dipole stub seeder instead. See eic/EICrecon#2746.
+  app->Add(new JOmniFactoryGeneratorT<B0TrackerStubSeeder_factory>(
       "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
       app));
 
@@ -383,6 +393,14 @@ void InitPlugin(JApplication* app) {
       {
           "B0TrackerCKFActsTrackStatesUnfiltered",
           "B0TrackerCKFActsTracksUnfiltered",
+      },
+      {
+          // Retain scattered tracks in the four-station B0 telescope.
+          // The wider chi2 cut still needs validation with background overlays.
+          .chi2CutOff            = {50.},
+          .particleHypothesisPdg = 2212,
+          .numMeasurementsMin    = 3,
+          .numB0StationsMin      = 3,
       },
       app));
 
@@ -410,6 +428,9 @@ void InitPlugin(JApplication* app) {
       {
           "B0TrackerCKFActsTrackStates",
           "B0TrackerCKFActsTracks",
+      },
+      {
+          .n_measurements_min = 3,
       },
       app));
 
