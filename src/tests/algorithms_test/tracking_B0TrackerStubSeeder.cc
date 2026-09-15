@@ -840,12 +840,123 @@ TEST_CASE("B0 overlap policy distinguishes subsets from duplicates", "[B0Tracker
   SECTION("two hits in common stay below the sharing cut") {
     CHECK(classifySeedOverlap(four, otherFour, 2, identity) == SeedOverlapKind::None);
   }
-  SECTION("same-size front/back clones are not treated as a subset") {
+  SECTION("same-size front/back clones are duplicates, not subsets") {
     const auto nearby = [](std::size_t a, std::size_t b) { return a % 10 == b % 10; };
-    CHECK(classifySeedOverlap(four, clone, 2, nearby) == SeedOverlapKind::Unrelated);
+    CHECK(classifySeedOverlap(four, clone, 2, nearby) == SeedOverlapKind::Duplicate);
   }
   SECTION("distinct families that share three hits are unrelated") {
     const std::vector<std::size_t> shifted{0, 1, 2, 9};
     CHECK(classifySeedOverlap(four, shifted, 2, identity) == SeedOverlapKind::Unrelated);
+  }
+}
+
+TEST_CASE("B0 seed families keep three-station fallbacks without crowding",
+          "[B0TrackerStubSeeder]") {
+  using eicrecon::b0stub::SeedFamilyCandidate;
+  using eicrecon::b0stub::selectB0SeedFamilies;
+
+  const auto identity = [](std::size_t a, std::size_t b) { return a == b; };
+
+  SECTION("a four-station candidate keeps its three-station sibling") {
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.4},
+        {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+    REQUIRE(families.size() == 1);
+    CHECK(families[0].primary == 0);
+    REQUIRE(families[0].fallbacks.size() == 1);
+    CHECK(families[0].fallbacks[0] == 1);
+  }
+
+  SECTION("front/back four-station clones collapse to one primary") {
+    const auto nearby = [](std::size_t a, std::size_t b) { return a % 10 == b % 10; };
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {10, 11, 12, 13}, .residual2 = 0.2},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, nearby);
+    REQUIRE(families.size() == 1);
+    CHECK(families[0].primary == 0);
+    CHECK(families[0].fallbacks.empty());
+  }
+
+  SECTION("fallbacks from one family do not displace a second family") {
+    std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+        {.hitIndices = {0, 1, 3}, .residual2 = 0.01},
+        {.hitIndices = {0, 2, 3}, .residual2 = 0.02},
+        {.hitIndices = {10, 11, 12, 13}, .residual2 = 0.2},
+        {.hitIndices = {10, 11, 12}, .residual2 = 0.0},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 2, 2, 20, identity);
+    REQUIRE(families.size() == 2);
+    CHECK(families[0].primary == 0);
+    CHECK(families[1].primary == 4);
+    CHECK(families[0].fallbacks.size() == 2);
+    CHECK(families[1].fallbacks.size() == 1);
+  }
+
+  SECTION("sharing three hits without containment keeps two families") {
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {0, 1, 2, 9}, .residual2 = 0.2},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+    REQUIRE(families.size() == 2);
+    CHECK(families[0].primary == 0);
+    CHECK(families[1].primary == 1);
+    CHECK(families[0].fallbacks.empty());
+    CHECK(families[1].fallbacks.empty());
+  }
+
+
+  SECTION("a shared three-hit subset cannot bridge unrelated primaries") {
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {0, 1, 2, 9}, .residual2 = 0.2},
+        {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+    REQUIRE(families.size() == 2);
+    CHECK(families[0].primary == 0);
+    CHECK(families[1].primary == 1);
+    CHECK(families[0].fallbacks.size() + families[1].fallbacks.size() == 1);
+  }
+
+  SECTION("all family primaries are ordered before every fallback") {
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+        {.hitIndices = {10, 11, 12, 13}, .residual2 = 0.2},
+        {.hitIndices = {10, 11, 12}, .residual2 = 0.0},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+    const auto order = eicrecon::b0stub::seedFamilyEmissionOrder(families);
+    REQUIRE(order.size() == 4);
+    CHECK(order[0].candidate == 0);
+    CHECK_FALSE(order[0].fallback);
+    CHECK(order[1].candidate == 2);
+    CHECK_FALSE(order[1].fallback);
+    CHECK(order[2].candidate == 1);
+    CHECK(order[2].fallback);
+    CHECK(order[3].candidate == 3);
+    CHECK(order[3].fallback);
+  }
+
+  SECTION("unrelated families have priority over extra fallbacks") {
+    std::vector<SeedFamilyCandidate> ranked;
+    for (std::size_t f = 0; f < 3; ++f) {
+      const std::size_t base = 10 * f;
+      ranked.push_back({.hitIndices = {base, base + 1, base + 2, base + 3}, .residual2 = 0.1 * f});
+      ranked.push_back({.hitIndices = {base, base + 1, base + 2}, .residual2 = 0.0});
+    }
+    const auto families = selectB0SeedFamilies(ranked, 2, 2, 2, 1, identity);
+    REQUIRE(families.size() == 2);
+    CHECK(families[0].primary == 0);
+    CHECK(families[1].primary == 2);
+    CHECK(families[0].fallbacks.size() == 1);
+    CHECK(families[1].fallbacks.empty());
   }
 }

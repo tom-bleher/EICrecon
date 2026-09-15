@@ -217,14 +217,16 @@ namespace b0stub {
                                     double minCurvatureSignificance, int inferredCharge,
                                     bool testBothCharges, int configuredCharge);
 
-  /// How a candidate overlaps an already-accepted seed under a same-hit predicate.
+  /// How two seed candidates overlap under a same-hit predicate.
   ///
-  /// `None`: at most `maxSharedHits` shared hits, so both may be kept.
+  /// `None`: at most `maxSharedHits` shared hits.
   /// `Subset`: more than `maxSharedHits` shared, and every hit of one candidate
   /// matches a hit of the other, but not vice versa (leave-one-station-out).
-  /// `Unrelated`: more than `maxSharedHits` shared without that containment
-  /// (includes same-size front/back duplicates of one trajectory).
-  enum class SeedOverlapKind { None, Subset, Unrelated };
+  /// `Duplicate`: more than `maxSharedHits` shared and every hit of each
+  /// candidate matches the other (front/back clones of one trajectory).
+  /// `Unrelated`: more than `maxSharedHits` shared without containment
+  /// (distinct nearby tracks).
+  enum class SeedOverlapKind { None, Subset, Duplicate, Unrelated };
 
   template <typename SameHit>
   SeedOverlapKind classifySeedOverlap(const std::vector<std::size_t>& cand,
@@ -263,10 +265,104 @@ namespace b0stub {
     }
     const bool candCovered = !cand.empty() && candMatched == cand.size();
     const bool accCovered  = !accepted.empty() && accMatched == accepted.size();
+    if (candCovered && accCovered) {
+      return SeedOverlapKind::Duplicate;
+    }
     if (candCovered != accCovered) {
       return SeedOverlapKind::Subset;
     }
     return SeedOverlapKind::Unrelated;
+  }
+
+  /// One ranked seed candidate for family selection (already sorted: more
+  /// stations first, then residual).
+  struct SeedFamilyCandidate {
+    std::vector<std::size_t> hitIndices;
+    double residual2{};
+  };
+
+  struct SeedFamily {
+    std::size_t primary{};
+    std::vector<std::size_t> fallbacks;
+  };
+
+  /// Group ranked candidates into track hypotheses. Subset and duplicate
+  /// overlaps form a family; unrelated overlaps stay separate families.
+  /// Primaries (one per family) are filled first up to `maxSeeds`. Fallbacks
+  /// are fewer-station members of those emitted families only, at most
+  /// `maxFallbacksPerFamily` each and `maxFallbackSeeds` in total.
+  template <typename SameHit>
+  std::vector<SeedFamily> selectB0SeedFamilies(const std::vector<SeedFamilyCandidate>& ranked,
+                                               unsigned int maxSharedHits, unsigned int maxSeeds,
+                                               unsigned int maxFallbacksPerFamily,
+                                               unsigned int maxFallbackSeeds, SameHit&& sameHit) {
+    std::vector<SeedFamily> out;
+    if (ranked.empty() || maxSeeds == 0) {
+      return out;
+    }
+
+    // Families are anchored to their ranked primary. Do not use connected
+    // components here: subset overlap is not transitive. In particular, a
+    // three-station candidate may be a subset of two otherwise-unrelated
+    // four-station hypotheses and must never merge those primaries.
+    std::size_t fallbacksUsed = 0;
+    for (std::size_t i = 0; i < ranked.size(); ++i) {
+      bool belongsToExistingFamily = false;
+      for (auto& family : out) {
+        const auto kind = classifySeedOverlap(ranked[i].hitIndices,
+                                              ranked[family.primary].hitIndices,
+                                              maxSharedHits, sameHit);
+        if (kind == SeedOverlapKind::Duplicate) {
+          belongsToExistingFamily = true;
+          break;
+        }
+        if (kind == SeedOverlapKind::Subset &&
+            ranked[i].hitIndices.size() < ranked[family.primary].hitIndices.size()) {
+          belongsToExistingFamily = true;
+          if (family.fallbacks.size() < maxFallbacksPerFamily &&
+              fallbacksUsed < maxFallbackSeeds) {
+            family.fallbacks.push_back(i);
+            ++fallbacksUsed;
+          }
+          break;
+        }
+      }
+
+      if (belongsToExistingFamily) {
+        continue;
+      }
+      if (out.size() < maxSeeds) {
+        out.push_back(SeedFamily{.primary = i});
+      }
+    }
+    return out;
+  }
+
+  struct SeedFamilyEmission {
+    std::size_t candidate{};
+    bool fallback{false};
+  };
+
+  /// Flatten logical families for CKF input. Every distinct-family primary
+  /// is emitted before any recovery fallback, so charge expansion or a
+  /// fallback cap cannot prevent a later primary from reaching CKF.
+  inline std::vector<SeedFamilyEmission>
+  seedFamilyEmissionOrder(const std::vector<SeedFamily>& families) {
+    std::vector<SeedFamilyEmission> order;
+    std::size_t nFallbacks = 0;
+    for (const auto& family : families) {
+      nFallbacks += family.fallbacks.size();
+    }
+    order.reserve(families.size() + nFallbacks);
+    for (const auto& family : families) {
+      order.push_back({.candidate = family.primary, .fallback = false});
+    }
+    for (const auto& family : families) {
+      for (const std::size_t idx : family.fallbacks) {
+        order.push_back({.candidate = idx, .fallback = true});
+      }
+    }
+    return order;
   }
 
 } // namespace b0stub
