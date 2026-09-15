@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (C) 2024 Minjung Kim, Barak Schmookler
 #include "AmbiguitySolver.h"
+#include "B0ReconstructionCounters.h"
 
 #include <Acts/AmbiguityResolution/GreedyAmbiguityResolution.hpp>
 #include <Acts/EventData/MeasurementHelpers.hpp>
@@ -17,6 +18,7 @@
 #include <any>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -79,6 +81,18 @@ void AmbiguitySolver::process(const Input& input, const Output& output) const {
     auto destProxy = solvedTracks.makeTrack();
     auto srcProxy  = input_trks.getTrack(state.trackTips.at(iTrack));
     destProxy.copyFrom(srcProxy);
+  }
+
+  if (b0counters::isB0AlgorithmName(this->name())) {
+    const auto chain = b0counters::chainFromAlgorithmName(this->name());
+    const auto nIn   = input_trks.size();
+    const auto nOut  = solvedTracks.size();
+    b0counters::incrementAmbiguity(chain, b0counters::AmbiguityStat::tracksIn, nIn);
+    b0counters::incrementAmbiguity(chain, b0counters::AmbiguityStat::tracksOut, nOut);
+    if (nIn > nOut) {
+      b0counters::incrementAmbiguity(chain, b0counters::AmbiguityStat::ambiguityRejected,
+                                     nIn - nOut);
+    }
   }
 
   // Allocate new const containers and assign pointers to outputs

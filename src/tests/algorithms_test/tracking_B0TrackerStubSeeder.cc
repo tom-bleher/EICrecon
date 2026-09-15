@@ -822,3 +822,30 @@ TEST_CASE("B0 beam-spot covariance is dominated by the longitudinal term",
   REQUIRE(solver.info() == Eigen::Success);
   CHECK(solver.eigenvalues().minCoeff() >= Approx(0.0).margin(1e-12));
 }
+
+TEST_CASE("B0 overlap policy distinguishes subsets from duplicates", "[B0TrackerStubSeeder]") {
+  using eicrecon::b0stub::classifySeedOverlap;
+  using eicrecon::b0stub::SeedOverlapKind;
+
+  const auto identity = [](std::size_t a, std::size_t b) { return a == b; };
+  const std::vector<std::size_t> four{0, 1, 2, 3};
+  const std::vector<std::size_t> three{0, 1, 2};
+  const std::vector<std::size_t> otherFour{0, 1, 4, 5};
+  const std::vector<std::size_t> clone{10, 11, 12, 13};
+
+  SECTION("a leave-one-station-out sibling is a subset of its parent") {
+    CHECK(classifySeedOverlap(three, four, 2, identity) == SeedOverlapKind::Subset);
+    CHECK(classifySeedOverlap(four, three, 2, identity) == SeedOverlapKind::Subset);
+  }
+  SECTION("two hits in common stay below the sharing cut") {
+    CHECK(classifySeedOverlap(four, otherFour, 2, identity) == SeedOverlapKind::None);
+  }
+  SECTION("same-size front/back clones are not treated as a subset") {
+    const auto nearby = [](std::size_t a, std::size_t b) { return a % 10 == b % 10; };
+    CHECK(classifySeedOverlap(four, clone, 2, nearby) == SeedOverlapKind::Unrelated);
+  }
+  SECTION("distinct families that share three hits are unrelated") {
+    const std::vector<std::size_t> shifted{0, 1, 2, 9};
+    CHECK(classifySeedOverlap(four, shifted, 2, identity) == SeedOverlapKind::Unrelated);
+  }
+}

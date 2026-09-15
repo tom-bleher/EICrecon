@@ -18,6 +18,7 @@ add_executable(
   digi_CALOROCDigitization.cc
   tracking_MPGDHitReconstruction.cc
   tracking_B0TrackerStubSeeder.cc
+  tracking_B0ReconstructionCounters.cc
   tracking_B0TrackStationSelector.cc
   tracking_CKFParticleHypothesis.cc
   digi_MPGDTrackerDigi.cc
