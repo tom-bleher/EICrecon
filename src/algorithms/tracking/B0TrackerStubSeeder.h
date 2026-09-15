@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <numeric>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -298,71 +297,72 @@ namespace b0stub {
                                                unsigned int maxFallbacksPerFamily,
                                                unsigned int maxFallbackSeeds, SameHit&& sameHit) {
     std::vector<SeedFamily> out;
-    const std::size_t n = ranked.size();
-    if (n == 0 || maxSeeds == 0) {
+    if (ranked.empty() || maxSeeds == 0) {
       return out;
     }
 
-    std::vector<std::size_t> parent(n);
-    std::iota(parent.begin(), parent.end(), 0);
-    const auto findp = [&](std::size_t i) {
-      while (parent[i] != i) {
-        parent[i] = parent[parent[i]];
-        i         = parent[i];
-      }
-      return i;
-    };
-    const auto unite = [&](std::size_t a, std::size_t b) {
-      a = findp(a);
-      b = findp(b);
-      if (a == b) {
-        return;
-      }
-      if (a < b) {
-        parent[b] = a;
-      } else {
-        parent[a] = b;
-      }
-    };
-
-    for (std::size_t i = 0; i < n; ++i) {
-      for (std::size_t j = i + 1; j < n; ++j) {
-        const auto kind =
-            classifySeedOverlap(ranked[i].hitIndices, ranked[j].hitIndices, maxSharedHits, sameHit);
-        if (kind == SeedOverlapKind::Subset || kind == SeedOverlapKind::Duplicate) {
-          unite(i, j);
-        }
-      }
-    }
-
-    std::map<std::size_t, std::vector<std::size_t>> grouped;
-    for (std::size_t i = 0; i < n; ++i) {
-      grouped[findp(i)].push_back(i);
-    }
-
+    // Families are anchored to their ranked primary. Do not use connected
+    // components here: subset overlap is not transitive. In particular, a
+    // three-station candidate may be a subset of two otherwise-unrelated
+    // four-station hypotheses and must never merge those primaries.
     std::size_t fallbacksUsed = 0;
-    for (const auto& [root, members] : grouped) {
-      if (out.size() >= maxSeeds) {
-        break;
-      }
-      SeedFamily family{.primary = root};
-      if (maxFallbacksPerFamily > 0 && maxFallbackSeeds > fallbacksUsed) {
-        const std::size_t nPrimary = ranked[root].hitIndices.size();
-        for (const std::size_t idx : members) {
-          if (idx == root || ranked[idx].hitIndices.size() >= nPrimary) {
-            continue;
+    for (std::size_t i = 0; i < ranked.size(); ++i) {
+      bool belongsToExistingFamily = false;
+      for (auto& family : out) {
+        const auto kind = classifySeedOverlap(ranked[i].hitIndices,
+                                              ranked[family.primary].hitIndices,
+                                              maxSharedHits, sameHit);
+        if (kind == SeedOverlapKind::Duplicate) {
+          belongsToExistingFamily = true;
+          break;
+        }
+        if (kind == SeedOverlapKind::Subset &&
+            ranked[i].hitIndices.size() < ranked[family.primary].hitIndices.size()) {
+          belongsToExistingFamily = true;
+          if (family.fallbacks.size() < maxFallbacksPerFamily &&
+              fallbacksUsed < maxFallbackSeeds) {
+            family.fallbacks.push_back(i);
+            ++fallbacksUsed;
           }
-          if (family.fallbacks.size() >= maxFallbacksPerFamily ||
-              fallbacksUsed >= maxFallbackSeeds) {
-            break;
-          }
-          family.fallbacks.push_back(idx);
-          ++fallbacksUsed;
+          break;
         }
       }
-      out.push_back(std::move(family));
+
+      if (belongsToExistingFamily) {
+        continue;
+      }
+      if (out.size() < maxSeeds) {
+        out.push_back(SeedFamily{.primary = i});
+      }
     }
     return out;
+  }
+
+  struct SeedFamilyEmission {
+    std::size_t candidate{};
+    bool fallback{false};
+  };
+
+  /// Flatten logical families for CKF input. Every distinct-family primary
+  /// is emitted before any recovery fallback, so charge expansion or a
+  /// fallback cap cannot prevent a later primary from reaching CKF.
+  inline std::vector<SeedFamilyEmission>
+  seedFamilyEmissionOrder(const std::vector<SeedFamily>& families) {
+    std::vector<SeedFamilyEmission> order;
+    std::size_t nFallbacks = 0;
+    for (const auto& family : families) {
+      nFallbacks += family.fallbacks.size();
+    }
+    order.reserve(families.size() + nFallbacks);
+    for (const auto& family : families) {
+      order.push_back({.candidate = family.primary, .fallback = false});
+    }
+    for (const auto& family : families) {
+      for (const std::size_t idx : family.fallbacks) {
+        order.push_back({.candidate = idx, .fallback = true});
+      }
+    }
+    return order;
   }
 
 } // namespace b0stub

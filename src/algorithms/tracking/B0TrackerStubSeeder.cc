@@ -1326,16 +1326,18 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       b0stub::selectB0SeedFamilies(ranked, m_cfg.maxSharedHits, m_cfg.maxSeeds,
                                    m_cfg.maxFallbacksPerFamily, m_cfg.maxFallbackSeeds, sameHit);
 
+  struct SelectedCandidate {
+    const StubCandidate* candidate{};
+    bool fallback{false};
+  };
   std::vector<char> kept(candidates.size(), 0);
-  std::vector<const StubCandidate*> accepted;
-  accepted.reserve(families.size() * 3);
-  for (const auto& family : families) {
-    kept[family.primary] = 1;
-    accepted.push_back(&candidates[family.primary]);
-    for (const std::size_t idx : family.fallbacks) {
-      kept[idx] = 1;
-      accepted.push_back(&candidates[idx]);
-    }
+  std::vector<SelectedCandidate> accepted;
+  const auto emissionOrder = b0stub::seedFamilyEmissionOrder(families);
+  accepted.reserve(emissionOrder.size());
+  for (const auto& selected : emissionOrder) {
+    kept[selected.candidate] = 1;
+    accepted.push_back(
+        {.candidate = &candidates[selected.candidate], .fallback = selected.fallback});
   }
   for (std::size_t i = 0; i < candidates.size(); ++i) {
     if (kept[i] != 0) {
@@ -1359,10 +1361,10 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // ------------------------------------------------------------------
   // Convert accepted candidates to origin-perigee seed parameters.
   // ------------------------------------------------------------------
-  const unsigned int maxEmitted = m_cfg.maxSeeds + m_cfg.maxFallbackSeeds;
-  unsigned int emitted          = 0;
-  for (const auto* cand : accepted) {
-    if (emitted >= maxEmitted) {
+  unsigned int fallbackEmitted = 0;
+  for (const auto& selected : accepted) {
+    const auto* cand = selected.candidate;
+    if (selected.fallback && fallbackEmitted >= m_cfg.maxFallbackSeeds) {
       break;
     }
     const SeedVector state =
@@ -1375,7 +1377,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                                  cand->inferredCharge, m_cfg.testBothCharges, m_cfg.charge);
 
     for (const int charge : charges) {
-      if (emitted >= maxEmitted) {
+      if (selected.fallback && fallbackEmitted >= m_cfg.maxFallbackSeeds) {
         break;
       }
       const double emittedQOverP = charge * std::abs(cand->qOverP);
@@ -1429,7 +1431,9 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       for (std::size_t idx : cand->hitIndices) {
         seed.addToHits(ionHits[idx]);
       }
-      ++emitted;
+      if (selected.fallback) {
+        ++fallbackEmitted;
+      }
 
       trace("B0 stub seed: q={} q/p={:.5f} 1/GeV theta={:.4f} phi={:.3f} "
             "loc=({:.2f},{:.2f}) rms=({:.3f},{:.3f})",

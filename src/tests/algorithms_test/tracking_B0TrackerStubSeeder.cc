@@ -911,6 +911,40 @@ TEST_CASE("B0 seed families keep three-station fallbacks without crowding",
     CHECK(families[1].fallbacks.empty());
   }
 
+
+  SECTION("a shared three-hit subset cannot bridge unrelated primaries") {
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {0, 1, 2, 9}, .residual2 = 0.2},
+        {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+    REQUIRE(families.size() == 2);
+    CHECK(families[0].primary == 0);
+    CHECK(families[1].primary == 1);
+    CHECK(families[0].fallbacks.size() + families[1].fallbacks.size() == 1);
+  }
+
+  SECTION("all family primaries are ordered before every fallback") {
+    const std::vector<SeedFamilyCandidate> ranked{
+        {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+        {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+        {.hitIndices = {10, 11, 12, 13}, .residual2 = 0.2},
+        {.hitIndices = {10, 11, 12}, .residual2 = 0.0},
+    };
+    const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+    const auto order = eicrecon::b0stub::seedFamilyEmissionOrder(families);
+    REQUIRE(order.size() == 4);
+    CHECK(order[0].candidate == 0);
+    CHECK_FALSE(order[0].fallback);
+    CHECK(order[1].candidate == 2);
+    CHECK_FALSE(order[1].fallback);
+    CHECK(order[2].candidate == 1);
+    CHECK(order[2].fallback);
+    CHECK(order[3].candidate == 3);
+    CHECK(order[3].fallback);
+  }
+
   SECTION("unrelated families have priority over extra fallbacks") {
     std::vector<SeedFamilyCandidate> ranked;
     for (std::size_t f = 0; f < 3; ++f) {
