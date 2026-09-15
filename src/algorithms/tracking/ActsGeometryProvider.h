@@ -135,16 +135,12 @@ private:
   /// Keep this below half the gap between neighbouring tracking volumes.
   double m_layerEnvelopeR{1.0};
   double m_layerEnvelopeZ{5.0};
-  bool m_b0WindowMaterial{false};
 
 public:
   void setLayerEnvelopeR(double envelope) { m_layerEnvelopeR = envelope; }
   double getLayerEnvelopeR() const { return m_layerEnvelopeR; }
   void setLayerEnvelopeZ(double envelope) { m_layerEnvelopeZ = envelope; }
   double getLayerEnvelopeZ() const { return m_layerEnvelopeZ; }
-
-  void setB0WindowMaterial(bool enabled) { m_b0WindowMaterial = enabled; }
-  bool getB0WindowMaterial() const { return m_b0WindowMaterial; }
 
   void setObjWriteIt(bool writeit) { m_objWriteIt = writeit; }
   bool getObjWriteIt() const { return m_objWriteIt; }

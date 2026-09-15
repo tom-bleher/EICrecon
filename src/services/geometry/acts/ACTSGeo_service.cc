@@ -81,12 +81,6 @@ std::shared_ptr<const ActsGeometryProvider> ACTSGeo_service::actsGeoProvider() {
       m_acts_provider->setLayerEnvelopeR(layerEnvelopeR);
       m_acts_provider->setLayerEnvelopeZ(layerEnvelopeZ);
 
-      bool b0WindowMaterial = m_acts_provider->getB0WindowMaterial();
-      m_app->SetDefaultParameter("acts:B0WindowMaterial", b0WindowMaterial,
-                                 "Experimental passive B0 window volume; requires a matching "
-                                 "regenerated material map and compatible B0 geometry");
-      m_acts_provider->setB0WindowMaterial(b0WindowMaterial);
-
       std::string outputTag = m_acts_provider->getOutputTag();
       std::string outputDir = m_acts_provider->getOutputDir();
       m_app->SetDefaultParameter("acts:OutputTag", outputTag, "Obj and ply output file tag");

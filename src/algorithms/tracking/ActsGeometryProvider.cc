@@ -42,7 +42,6 @@
 #include <utility>
 
 #include "ActsGeometryProvider.h"
-#include "B0WindowTrackingGeometry.h"
 #include "extensions/spdlog/SpdlogToActs.h"
 
 template <typename T>
@@ -171,13 +170,10 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
   double defaultLayerThickness = Acts::UnitConstants::fm;
 
   try {
-    const auto converter =
-        m_b0WindowMaterial ? b0window::convertDD4hepDetector : ActsPlugins::convertDD4hepDetector;
-    m_trackingGeo =
-        converter(m_dd4hepDetector->world(), *logger, bTypePhi, bTypeR, bTypeZ, layerEnvelopeR,
-                  layerEnvelopeZ, defaultLayerThickness, ActsPlugins::sortDetElementsByID,
-                  m_trackingGeoCtx, materialDeco, geometryIdHook,
-                  ActsPlugins::DD4hepLayerBuilder::defaultDetectorElementFactory);
+    m_trackingGeo = ActsPlugins::convertDD4hepDetector(
+        m_dd4hepDetector->world(), *logger, bTypePhi, bTypeR, bTypeZ, layerEnvelopeR,
+        layerEnvelopeZ, defaultLayerThickness, ActsPlugins::sortDetElementsByID, m_trackingGeoCtx,
+        materialDeco, geometryIdHook);
   } catch (const std::exception& ex) {
     m_init_log->error("Error during DD4Hep -> ACTS geometry conversion: {}", ex.what());
     m_init_log->info("Set parameter acts:LogLevel=trace to see conversion info and possibly "
