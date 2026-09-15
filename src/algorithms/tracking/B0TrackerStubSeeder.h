@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -217,14 +218,16 @@ namespace b0stub {
                                     double minCurvatureSignificance, int inferredCharge,
                                     bool testBothCharges, int configuredCharge);
 
-  /// How a candidate overlaps an already-accepted seed under a same-hit predicate.
+  /// How two seed candidates overlap under a same-hit predicate.
   ///
-  /// `None`: at most `maxSharedHits` shared hits, so both may be kept.
+  /// `None`: at most `maxSharedHits` shared hits.
   /// `Subset`: more than `maxSharedHits` shared, and every hit of one candidate
   /// matches a hit of the other, but not vice versa (leave-one-station-out).
-  /// `Unrelated`: more than `maxSharedHits` shared without that containment
-  /// (includes same-size front/back duplicates of one trajectory).
-  enum class SeedOverlapKind { None, Subset, Unrelated };
+  /// `Duplicate`: more than `maxSharedHits` shared and every hit of each
+  /// candidate matches the other (front/back clones of one trajectory).
+  /// `Unrelated`: more than `maxSharedHits` shared without containment
+  /// (distinct nearby tracks).
+  enum class SeedOverlapKind { None, Subset, Duplicate, Unrelated };
 
   template <typename SameHit>
   SeedOverlapKind classifySeedOverlap(const std::vector<std::size_t>& cand,
@@ -263,10 +266,103 @@ namespace b0stub {
     }
     const bool candCovered = !cand.empty() && candMatched == cand.size();
     const bool accCovered  = !accepted.empty() && accMatched == accepted.size();
+    if (candCovered && accCovered) {
+      return SeedOverlapKind::Duplicate;
+    }
     if (candCovered != accCovered) {
       return SeedOverlapKind::Subset;
     }
     return SeedOverlapKind::Unrelated;
+  }
+
+  /// One ranked seed candidate for family selection (already sorted: more
+  /// stations first, then residual).
+  struct SeedFamilyCandidate {
+    std::vector<std::size_t> hitIndices;
+    double residual2{};
+  };
+
+  struct SeedFamily {
+    std::size_t primary{};
+    std::vector<std::size_t> fallbacks;
+  };
+
+  /// Group ranked candidates into track hypotheses. Subset and duplicate
+  /// overlaps form a family; unrelated overlaps stay separate families.
+  /// Primaries (one per family) are filled first up to `maxSeeds`. Fallbacks
+  /// are fewer-station members of those emitted families only, at most
+  /// `maxFallbacksPerFamily` each and `maxFallbackSeeds` in total.
+  template <typename SameHit>
+  std::vector<SeedFamily> selectB0SeedFamilies(const std::vector<SeedFamilyCandidate>& ranked,
+                                               unsigned int maxSharedHits, unsigned int maxSeeds,
+                                               unsigned int maxFallbacksPerFamily,
+                                               unsigned int maxFallbackSeeds, SameHit&& sameHit) {
+    std::vector<SeedFamily> out;
+    const std::size_t n = ranked.size();
+    if (n == 0 || maxSeeds == 0) {
+      return out;
+    }
+
+    std::vector<std::size_t> parent(n);
+    std::iota(parent.begin(), parent.end(), 0);
+    const auto findp = [&](std::size_t i) {
+      while (parent[i] != i) {
+        parent[i] = parent[parent[i]];
+        i         = parent[i];
+      }
+      return i;
+    };
+    const auto unite = [&](std::size_t a, std::size_t b) {
+      a = findp(a);
+      b = findp(b);
+      if (a == b) {
+        return;
+      }
+      if (a < b) {
+        parent[b] = a;
+      } else {
+        parent[a] = b;
+      }
+    };
+
+    for (std::size_t i = 0; i < n; ++i) {
+      for (std::size_t j = i + 1; j < n; ++j) {
+        const auto kind =
+            classifySeedOverlap(ranked[i].hitIndices, ranked[j].hitIndices, maxSharedHits, sameHit);
+        if (kind == SeedOverlapKind::Subset || kind == SeedOverlapKind::Duplicate) {
+          unite(i, j);
+        }
+      }
+    }
+
+    std::map<std::size_t, std::vector<std::size_t>> grouped;
+    for (std::size_t i = 0; i < n; ++i) {
+      grouped[findp(i)].push_back(i);
+    }
+
+    std::size_t fallbacksUsed = 0;
+    for (const auto& [root, members] : grouped) {
+      if (out.size() >= maxSeeds) {
+        break;
+      }
+      SeedFamily family{.primary = root};
+      if (maxFallbacksPerFamily > 0 && maxFallbackSeeds > fallbacksUsed) {
+        const std::size_t nPrimary = ranked[root].hitIndices.size();
+        for (const std::size_t idx : members) {
+          if (idx == root || ranked[idx].hitIndices.size() >= nPrimary) {
+            continue;
+          }
+          if (family.fallbacks.size() >= maxFallbacksPerFamily ||
+              fallbacksUsed >= maxFallbackSeeds) {
+            break;
+          }
+          family.fallbacks.push_back(idx);
+          ++fallbacksUsed;
+        }
+      }
+      out.push_back(std::move(family));
+    }
+    return out;
   }
 
 } // namespace b0stub

@@ -1287,7 +1287,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   }
 
   // ------------------------------------------------------------------
-  // Rank by residual, deduplicate by shared hits, emit up to maxSeeds.
+  // Rank by residual, group into families, emit primary then fallbacks.
   // ------------------------------------------------------------------
   // More stations first (a 3-point auxiliary fit interpolates exactly, so raw
   // residuals would always favour subsets over genuine full-station
@@ -1316,37 +1316,53 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     return dx * dx + dy * dy <= dupDist2;
   };
 
-  std::vector<const StubCandidate*> accepted;
+  std::vector<b0stub::SeedFamilyCandidate> ranked;
+  ranked.reserve(candidates.size());
   for (const auto& cand : candidates) {
-    if (accepted.size() >= m_cfg.maxSeeds) {
-      break;
+    ranked.push_back({.hitIndices = cand.hitIndices,
+                      .residual2  = cand.fit.rmsX * cand.fit.rmsX + cand.fit.rmsY * cand.fit.rmsY});
+  }
+  const auto families =
+      b0stub::selectB0SeedFamilies(ranked, m_cfg.maxSharedHits, m_cfg.maxSeeds,
+                                   m_cfg.maxFallbacksPerFamily, m_cfg.maxFallbackSeeds, sameHit);
+
+  std::vector<char> kept(candidates.size(), 0);
+  std::vector<const StubCandidate*> accepted;
+  accepted.reserve(families.size() * 3);
+  for (const auto& family : families) {
+    kept[family.primary] = 1;
+    accepted.push_back(&candidates[family.primary]);
+    for (const std::size_t idx : family.fallbacks) {
+      kept[idx] = 1;
+      accepted.push_back(&candidates[idx]);
     }
-    bool overlaps = false;
-    for (const auto* acc : accepted) {
-      const auto kind = b0stub::classifySeedOverlap(cand.hitIndices, acc->hitIndices,
+  }
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    if (kept[i] != 0) {
+      continue;
+    }
+    for (const auto& family : families) {
+      const auto kind = b0stub::classifySeedOverlap(candidates[i].hitIndices,
+                                                    candidates[family.primary].hitIndices,
                                                     m_cfg.maxSharedHits, sameHit);
-      if (kind == b0stub::SeedOverlapKind::None) {
-        continue;
-      }
-      overlaps = true;
       if (kind == b0stub::SeedOverlapKind::Subset) {
         b0counters::incrementSeeder(b0counters::SeederStat::overlapRejectedSubset);
-      } else {
-        b0counters::incrementSeeder(b0counters::SeederStat::overlapRejectedUnrelated);
+        break;
       }
-      break;
-    }
-    if (!overlaps) {
-      accepted.push_back(&cand);
+      if (kind == b0stub::SeedOverlapKind::Duplicate) {
+        b0counters::incrementSeeder(b0counters::SeederStat::overlapRejectedUnrelated);
+        break;
+      }
     }
   }
 
   // ------------------------------------------------------------------
   // Convert accepted candidates to origin-perigee seed parameters.
   // ------------------------------------------------------------------
-  unsigned int emitted = 0;
+  const unsigned int maxEmitted = m_cfg.maxSeeds + m_cfg.maxFallbackSeeds;
+  unsigned int emitted          = 0;
   for (const auto* cand : accepted) {
-    if (emitted >= m_cfg.maxSeeds) {
+    if (emitted >= maxEmitted) {
       break;
     }
     const SeedVector state =
@@ -1359,7 +1375,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
                                  cand->inferredCharge, m_cfg.testBothCharges, m_cfg.charge);
 
     for (const int charge : charges) {
-      if (emitted >= m_cfg.maxSeeds) {
+      if (emitted >= maxEmitted) {
         break;
       }
       const double emittedQOverP = charge * std::abs(cand->qOverP);

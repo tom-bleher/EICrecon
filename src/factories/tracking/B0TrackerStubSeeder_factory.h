@@ -42,9 +42,15 @@ private:
   ParameterRef<unsigned int> m_maxCombinations{this, "maxCombinations", config().maxCombinations,
                                                "cap on hit combinations per event"};
   ParameterRef<unsigned int> m_maxSeeds{this, "maxSeeds", config().maxSeeds,
-                                        "maximum seeds per event"};
+                                        "maximum primary seeds (track families) per event"};
+  ParameterRef<unsigned int> m_maxFallbacksPerFamily{
+      this, "maxFallbacksPerFamily", config().maxFallbacksPerFamily,
+      "leave-one-station-out fallbacks kept per seed family"};
+  ParameterRef<unsigned int> m_maxFallbackSeeds{
+      this, "maxFallbackSeeds", config().maxFallbackSeeds,
+      "global cap on fallback seeds; families are filled first"};
   ParameterRef<unsigned int> m_maxSharedHits{this, "maxSharedHits", config().maxSharedHits,
-                                             "max shared hits between accepted seeds"};
+                                             "max shared hits before candidates form one family"};
   ParameterRef<float> m_sharedHitDistance{
       this, "sharedHitDistance", config().sharedHitDistance,
       "same-station hits closer than this [mm] count as shared"};

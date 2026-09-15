@@ -48,10 +48,18 @@ struct B0TrackerStubSeederConfig {
   float maxYBeamlineResidual = 5.0;
   /// Cap on hit combinations tried per event
   unsigned int maxCombinations = 512;
-  /// Maximum seeds emitted per event (after overlap deduplication)
+  /// Maximum primary seeds (distinct track families) per event
   unsigned int maxSeeds = 20;
-  /// Two accepted seeds may share at most this many hits. Keeping this below
-  /// three prevents leave-one-out subsets from duplicating their parent seed.
+  /// Leave-one-station-out fallbacks kept per family after the preferred
+  /// four-station seed. 0 restores the old behaviour of dropping subsets.
+  unsigned int maxFallbacksPerFamily = 2;
+  /// Global cap on fallback seeds. Distinct families are filled first, so
+  /// fallbacks cannot consume the primary `maxSeeds` budget.
+  unsigned int maxFallbackSeeds = 20;
+  /// Two candidates belong to the same family when they share more than this
+  /// many hits (or proximity-equivalent hits) and one contains the other, or
+  /// when they are same-size front/back duplicates. Unrelated overlaps stay
+  /// separate families.
   unsigned int maxSharedHits = 2;
   /// Hits at the same station closer than this (mm, ion-frame transverse
   /// distance) count as the same hit for the sharing test above. Front/back
