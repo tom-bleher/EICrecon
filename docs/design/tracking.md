@@ -301,7 +301,14 @@ flowchart TB
 ```
 
 ## Full diagram for B0 track reconstruction
-In progress...
+
+Prompt forward-proton reconstruction for solenoid-off `epic_ip6_extended`.
+The evaluation command, efficiency denominators, and failure counters are
+documented in `src/benchmarks/reconstruction/b0_tracking/README.md`.
+
+A later independent final refit, if added to shared `CKFTracking`, must be an
+explicit opt-in flag defaulting to off so central CKF is unchanged. Do not
+gate fitted-parameter changes on `numB0StationsMin`.
 
 ## Description of collections
 - MCParticles ([edm4hep::MCParticle](https://github.com/key4hep/EDM4hep/blob/v00-99-02/edm4hep.yaml#L230-L258)) -- Monte Carlo particle

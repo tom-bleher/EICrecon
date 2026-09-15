@@ -2,6 +2,7 @@
 // Copyright (C) 2022 - 2025 Whitney Armstrong, Wouter Deconinck, Dmitry Romanov, Shujie Li, Dmitry Kalinkin
 
 #include "CKFTracking.h"
+#include "B0ReconstructionCounters.h"
 
 #include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
@@ -29,6 +30,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <tuple>
 #include <utility>
@@ -304,34 +306,51 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   acts_tracks_temp.addColumn<unsigned int>("seed");
   Acts::ProxyAccessor<unsigned int> seedNumber("seed");
 
+  const bool countB0           = m_cfg.numB0StationsMin > 0;
+  const std::string_view chain = b0counters::chainFromAlgorithmName(this->name());
+
   // Loop over seeds
   for (std::size_t iseed = 0; iseed < acts_init_trk_params.size(); ++iseed) {
 
     // Clear trackContainerTemp and trackStateContainerTemp
     acts_tracks_temp.clear();
 
+    if (countB0) {
+      b0counters::incrementCkf(chain, b0counters::CkfStat::seeds);
+    }
+
     // Run track finding for this seed
     auto result = (*m_trackFinderFunc)(acts_init_trk_params.at(iseed), options, acts_tracks_temp);
 
     if (!result.ok()) {
       debug("Track finding failed for seed {} with error {}", iseed, result.error().message());
+      if (countB0) {
+        b0counters::incrementCkf(chain, b0counters::CkfStat::ckfNoTrack);
+      }
       continue;
     }
 
     // Set seed number for all found tracks
-    auto& tracksForSeed = result.value();
+    auto& tracksForSeed         = result.value();
+    std::size_t acceptedForSeed = 0;
     for (auto& track : tracksForSeed) {
       // Check if track has at least one valid (non-outlier) measurement
       // (this check avoids errors inside smoothing and extrapolation)
       auto lastMeasurement = Acts::findLastMeasurementState(track);
       if (!lastMeasurement.ok()) {
         debug("Track {} for seed {} has no valid measurements, skipping", track.index(), iseed);
+        if (countB0) {
+          b0counters::incrementCkf(chain, b0counters::CkfStat::ckfTooFewHits);
+        }
         continue;
       }
 
       if (track.nMeasurements() < m_cfg.numMeasurementsMin) {
         trace("Track {} for seed {} has fewer measurements than minimum of {}, skipping",
               track.index(), iseed, m_cfg.numMeasurementsMin);
+        if (countB0) {
+          b0counters::incrementCkf(chain, b0counters::CkfStat::ckfTooFewHits);
+        }
         continue;
       }
 
@@ -344,6 +363,7 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         if (counts.stations < m_cfg.numB0StationsMin) {
           debug("Track {} for seed {} has {} B0 stations, fewer than required {}", track.index(),
                 iseed, counts.stations, m_cfg.numB0StationsMin);
+          b0counters::incrementCkf(chain, b0counters::CkfStat::ckfTooFewStations);
           continue;
         }
       }
@@ -352,6 +372,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       if (!smoothingResult.ok()) {
         debug("Smoothing for seed {} and track {} failed with error {}", iseed, track.index(),
               smoothingResult.error().message());
+        if (countB0) {
+          b0counters::incrementCkf(chain, b0counters::CkfStat::smoothingFailure);
+        }
         continue;
       }
 
@@ -390,6 +413,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       if (!extrapolationResult.ok()) {
         debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
               extrapolationResult.error().message());
+        if (countB0) {
+          b0counters::incrementCkf(chain, b0counters::CkfStat::extrapolationFailure);
+        }
         continue;
       }
 
@@ -398,6 +424,13 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       // Copy accepted track into main track container
       auto acts_tracks_proxy = acts_tracks.makeTrack();
       acts_tracks_proxy.copyFrom(track);
+      ++acceptedForSeed;
+      if (countB0) {
+        b0counters::incrementCkf(chain, b0counters::CkfStat::tracksAccepted);
+      }
+    }
+    if (countB0 && acceptedForSeed == 0) {
+      b0counters::incrementCkf(chain, b0counters::CkfStat::ckfNoTrack);
     }
   }
 

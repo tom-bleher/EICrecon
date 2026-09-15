@@ -62,6 +62,7 @@
 #include <vector>
 
 #include "algorithms/interfaces/ActsSvc.h"
+#include "algorithms/tracking/B0ReconstructionCounters.h"
 
 namespace eicrecon {
 
@@ -844,6 +845,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   if (!m_enabled || hits->empty()) {
     return;
   }
+  b0counters::incrementSeeder(b0counters::SeederStat::events);
 
   const double ca = std::cos(m_crossing_angle);
   const double sa = std::sin(m_crossing_angle);
@@ -936,6 +938,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   // a momentum prior instead).
   const unsigned int minStations = std::max(m_cfg.minStations, 3U);
   if (byStation.size() < minStations) {
+    b0counters::incrementSeeder(b0counters::SeederStat::insufficientStations);
     return;
   }
 
@@ -1003,7 +1006,12 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
   auto makeCompatible = [&](StubCandidate& cand) -> bool {
     // The y residual is only tested after the quadrupole bending has been
     // removed below.
-    if (!cand.fit.valid || cand.fit.rmsX > m_cfg.maxXResidual) {
+    if (!cand.fit.valid) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
+      return false;
+    }
+    if (cand.fit.rmsX > m_cfg.maxXResidual) {
+      b0counters::incrementSeeder(b0counters::SeederStat::xResidualRejected);
       return false;
     }
 
@@ -1023,6 +1031,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
       }
     }
     if (!std::isfinite(zEntrance) || !(zEntrance < zFirst)) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
 
@@ -1043,6 +1052,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const Acts::Vector3 global{xMid * ca + zMid * sa, yMid, -xMid * sa + zMid * ca};
     const auto field = fieldProvider->getField(global, fieldCache);
     if (!field.ok() || !field.value().allFinite()) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
     const Acts::Vector3 lab = field.value() / Acts::UnitConstants::T;
@@ -1050,6 +1060,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const double fieldX = lab.x() * ca - lab.z() * sa;
     const double fieldY = lab.y();
     if (std::abs(fieldY) < m_cfg.minAbsFieldY) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
     // The magnet is not rotated with the beam, so the dipole component along
@@ -1062,20 +1073,30 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     const auto gapField =
         fieldProvider->getField({xGap * ca + zGap * sa, yGap, -xGap * sa + zGap * ca}, fieldCache);
     if (!gapField.ok() || !gapField.value().allFinite()) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
     const double fieldYGap = gapField.value().y() / Acts::UnitConstants::T;
 
     cand.bendFit = b0stub::bendFitFromParabola(cand.fit, fieldY, zEntrance, zFirst, fieldYGap);
     if (!cand.bendFit.valid) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
 
     // Remove the quadrupole bending from the non-bend coordinates and refit
     // the line, so that it describes the field-free upstream trajectory.
     cand.fit = b0stub::fitWithNonBendCorrection(points, fieldX, cand.bendFit.qOverP, zEntrance);
-    if (!cand.fit.valid || cand.fit.rmsY > m_cfg.maxYResidual ||
-        std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
+    if (!cand.fit.valid) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
+      return false;
+    }
+    if (cand.fit.rmsY > m_cfg.maxYResidual) {
+      b0counters::incrementSeeder(b0counters::SeederStat::yResidualRejected);
+      return false;
+    }
+    if (std::abs(cand.fit.b1) > m_cfg.maxAbsTransverseSlope) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
     // Now q/p is measured and the y fit describes the upstream ray. Enforce
@@ -1084,11 +1105,13 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
              {.y = cand.fit.y(zFirst), .z = zFirst}, {.y = cand.fit.y(zLast), .z = zLast},
              m_cfg.maxAbsTransverseSlope, m_cfg.maxYBeamlineResidual, m_cfg.constrainToBeamline)
              .valid) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
 
     cand.txFirst = cand.fit.tx(zFirst);
     if (std::abs(cand.txFirst) > m_cfg.maxAbsTransverseSlope) {
+      b0counters::incrementSeeder(b0counters::SeederStat::otherRejected);
       return false;
     }
 
@@ -1097,6 +1120,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     cand.qOverP = cand.bendFit.qOverP;
     if (!std::isfinite(cand.qOverP) || cand.qOverP == 0.0 ||
         (m_cfg.pMin > 0.0 && std::abs(cand.qOverP) > 1.0 / m_cfg.pMin)) {
+      b0counters::incrementSeeder(b0counters::SeederStat::momentumRejected);
       return false;
     }
     cand.inferredCharge = cand.qOverP < 0.0 ? -1 : 1;
@@ -1150,6 +1174,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
             m_cfg.constrainToBeamline, curvature, zEntrance);
         if (!compatibility.valid) {
           ++endpointRejected;
+          b0counters::incrementSeeder(b0counters::SeederStat::endpointRejected);
           continue;
         }
         compatibleEndpoints.push_back({hFirst, hLast, curvature, compatibility});
@@ -1214,6 +1239,7 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
         if (tried >= perSubsetBudget) {
           budgetHit = true;
           ++truncated;
+          b0counters::incrementSeeder(b0counters::SeederStat::combinationBudgetExceeded);
           break;
         }
         std::vector<std::size_t> idxs;
@@ -1297,19 +1323,18 @@ void B0TrackerStubSeeder::process(const Input& input, const Output& output) cons
     }
     bool overlaps = false;
     for (const auto* acc : accepted) {
-      unsigned int shared = 0;
-      for (std::size_t i : cand.hitIndices) {
-        for (std::size_t j : acc->hitIndices) {
-          if (sameHit(i, j)) {
-            ++shared;
-            break;
-          }
-        }
+      const auto kind = b0stub::classifySeedOverlap(cand.hitIndices, acc->hitIndices,
+                                                    m_cfg.maxSharedHits, sameHit);
+      if (kind == b0stub::SeedOverlapKind::None) {
+        continue;
       }
-      if (shared > m_cfg.maxSharedHits) {
-        overlaps = true;
-        break;
+      overlaps = true;
+      if (kind == b0stub::SeedOverlapKind::Subset) {
+        b0counters::incrementSeeder(b0counters::SeederStat::overlapRejectedSubset);
+      } else {
+        b0counters::incrementSeeder(b0counters::SeederStat::overlapRejectedUnrelated);
       }
+      break;
     }
     if (!overlaps) {
       accepted.push_back(&cand);

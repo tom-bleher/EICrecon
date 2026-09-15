@@ -217,6 +217,58 @@ namespace b0stub {
                                     double minCurvatureSignificance, int inferredCharge,
                                     bool testBothCharges, int configuredCharge);
 
+  /// How a candidate overlaps an already-accepted seed under a same-hit predicate.
+  ///
+  /// `None`: at most `maxSharedHits` shared hits, so both may be kept.
+  /// `Subset`: more than `maxSharedHits` shared, and every hit of one candidate
+  /// matches a hit of the other, but not vice versa (leave-one-station-out).
+  /// `Unrelated`: more than `maxSharedHits` shared without that containment
+  /// (includes same-size front/back duplicates of one trajectory).
+  enum class SeedOverlapKind { None, Subset, Unrelated };
+
+  template <typename SameHit>
+  SeedOverlapKind classifySeedOverlap(const std::vector<std::size_t>& cand,
+                                      const std::vector<std::size_t>& accepted,
+                                      unsigned int maxSharedHits, SameHit&& sameHit) {
+    unsigned int shared      = 0;
+    unsigned int candMatched = 0;
+    for (const std::size_t i : cand) {
+      bool matched = false;
+      for (const std::size_t j : accepted) {
+        if (sameHit(i, j)) {
+          matched = true;
+          break;
+        }
+      }
+      if (matched) {
+        ++candMatched;
+        ++shared;
+      }
+    }
+    if (shared <= maxSharedHits) {
+      return SeedOverlapKind::None;
+    }
+    unsigned int accMatched = 0;
+    for (const std::size_t j : accepted) {
+      bool matched = false;
+      for (const std::size_t i : cand) {
+        if (sameHit(i, j)) {
+          matched = true;
+          break;
+        }
+      }
+      if (matched) {
+        ++accMatched;
+      }
+    }
+    const bool candCovered = !cand.empty() && candMatched == cand.size();
+    const bool accCovered  = !accepted.empty() && accMatched == accepted.size();
+    if (candCovered != accCovered) {
+      return SeedOverlapKind::Subset;
+    }
+    return SeedOverlapKind::Unrelated;
+  }
+
 } // namespace b0stub
 
 using B0TrackerStubSeederAlgorithm = algorithms::Algorithm<
