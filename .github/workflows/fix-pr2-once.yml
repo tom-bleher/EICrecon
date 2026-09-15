@@ -1,0 +1,255 @@
+name: Apply PR2 review fixes once
+
+on:
+  push:
+    branches:
+      - feat/b0-seed-families
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/b0-seed-families
+          fetch-depth: 0
+
+      - name: Apply reviewed B0 seed-family fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) Make family construction primary-anchored instead of transitive.
+          path = Path('src/algorithms/tracking/B0TrackerStubSeeder.h')
+          text = path.read_text()
+          text = text.replace('#include <numeric>\n', '')
+          start = text.index('  template <typename SameHit>\n  std::vector<SeedFamily> selectB0SeedFamilies')
+          end = text.index('\n\n} // namespace b0stub', start)
+          replacement = r'''  template <typename SameHit>
+          std::vector<SeedFamily> selectB0SeedFamilies(const std::vector<SeedFamilyCandidate>& ranked,
+                                                       unsigned int maxSharedHits, unsigned int maxSeeds,
+                                                       unsigned int maxFallbacksPerFamily,
+                                                       unsigned int maxFallbackSeeds, SameHit&& sameHit) {
+            std::vector<SeedFamily> out;
+            if (ranked.empty() || maxSeeds == 0) {
+              return out;
+            }
+
+            // Families are anchored to their ranked primary. Do not use connected
+            // components here: subset overlap is not transitive. In particular, a
+            // three-station candidate may be a subset of two otherwise-unrelated
+            // four-station hypotheses and must never merge those primaries.
+            std::size_t fallbacksUsed = 0;
+            for (std::size_t i = 0; i < ranked.size(); ++i) {
+              bool belongsToExistingFamily = false;
+              for (auto& family : out) {
+                const auto kind = classifySeedOverlap(ranked[i].hitIndices,
+                                                      ranked[family.primary].hitIndices,
+                                                      maxSharedHits, sameHit);
+                if (kind == SeedOverlapKind::Duplicate) {
+                  belongsToExistingFamily = true;
+                  break;
+                }
+                if (kind == SeedOverlapKind::Subset &&
+                    ranked[i].hitIndices.size() < ranked[family.primary].hitIndices.size()) {
+                  belongsToExistingFamily = true;
+                  if (family.fallbacks.size() < maxFallbacksPerFamily &&
+                      fallbacksUsed < maxFallbackSeeds) {
+                    family.fallbacks.push_back(i);
+                    ++fallbacksUsed;
+                  }
+                  break;
+                }
+              }
+
+              if (belongsToExistingFamily) {
+                continue;
+              }
+              if (out.size() < maxSeeds) {
+                out.push_back(SeedFamily{.primary = i});
+              }
+            }
+            return out;
+          }
+
+          struct SeedFamilyEmission {
+            std::size_t candidate{};
+            bool fallback{false};
+          };
+
+          /// Flatten logical families for CKF input. Every distinct-family primary
+          /// is emitted before any recovery fallback, so charge expansion or a
+          /// fallback cap cannot prevent a later primary from reaching CKF.
+          inline std::vector<SeedFamilyEmission>
+          seedFamilyEmissionOrder(const std::vector<SeedFamily>& families) {
+            std::vector<SeedFamilyEmission> order;
+            std::size_t nFallbacks = 0;
+            for (const auto& family : families) {
+              nFallbacks += family.fallbacks.size();
+            }
+            order.reserve(families.size() + nFallbacks);
+            for (const auto& family : families) {
+              order.push_back({.candidate = family.primary, .fallback = false});
+            }
+            for (const auto& family : families) {
+              for (const std::size_t idx : family.fallbacks) {
+                order.push_back({.candidate = idx, .fallback = true});
+              }
+            }
+            return order;
+          }'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+
+          # 2) Emit all primaries first. The fallback cap applies only to actual
+          # fallback TrackSeeds after charge-hypothesis expansion.
+          path = Path('src/algorithms/tracking/B0TrackerStubSeeder.cc')
+          text = path.read_text()
+          old = '''  std::vector<char> kept(candidates.size(), 0);
+          std::vector<const StubCandidate*> accepted;
+          accepted.reserve(families.size() * 3);
+          for (const auto& family : families) {
+            kept[family.primary] = 1;
+            accepted.push_back(&candidates[family.primary]);
+            for (const std::size_t idx : family.fallbacks) {
+              kept[idx] = 1;
+              accepted.push_back(&candidates[idx]);
+            }
+          }
+'''
+          new = '''  struct SelectedCandidate {
+            const StubCandidate* candidate{};
+            bool fallback{false};
+          };
+          std::vector<char> kept(candidates.size(), 0);
+          std::vector<SelectedCandidate> accepted;
+          const auto emissionOrder = b0stub::seedFamilyEmissionOrder(families);
+          accepted.reserve(emissionOrder.size());
+          for (const auto& selected : emissionOrder) {
+            kept[selected.candidate] = 1;
+            accepted.push_back(
+                {.candidate = &candidates[selected.candidate], .fallback = selected.fallback});
+          }
+'''
+          if old not in text:
+            raise SystemExit('expected accepted-candidate block not found')
+          text = text.replace(old, new, 1)
+
+          old = '''  const unsigned int maxEmitted = m_cfg.maxSeeds + m_cfg.maxFallbackSeeds;
+          unsigned int emitted          = 0;
+          for (const auto* cand : accepted) {
+            if (emitted >= maxEmitted) {
+              break;
+            }
+'''
+          new = '''  unsigned int fallbackEmitted = 0;
+          for (const auto& selected : accepted) {
+            const auto* cand = selected.candidate;
+            if (selected.fallback && fallbackEmitted >= m_cfg.maxFallbackSeeds) {
+              break;
+            }
+'''
+          if old not in text:
+            raise SystemExit('expected emission-loop header not found')
+          text = text.replace(old, new, 1)
+
+          old = '''    for (const int charge : charges) {
+              if (emitted >= maxEmitted) {
+                break;
+              }
+'''
+          new = '''    for (const int charge : charges) {
+              if (selected.fallback && fallbackEmitted >= m_cfg.maxFallbackSeeds) {
+                break;
+              }
+'''
+          if old not in text:
+            raise SystemExit('expected charge-loop cap not found')
+          text = text.replace(old, new, 1)
+
+          old = '''      ++emitted;
+
+              trace("B0 stub seed: q={} q/p={:.5f} 1/GeV theta={:.4f} phi={:.3f} "'''
+          new = '''      if (selected.fallback) {
+                ++fallbackEmitted;
+              }
+
+              trace("B0 stub seed: q={} q/p={:.5f} 1/GeV theta={:.4f} phi={:.3f} "'''
+          if old not in text:
+            raise SystemExit('expected emitted increment not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          # 3) Add regression tests for non-transitive subset overlap and
+          # primary-before-fallback emission order.
+          path = Path('src/tests/algorithms_test/tracking_B0TrackerStubSeeder.cc')
+          text = path.read_text()
+          anchor = '''  SECTION("sharing three hits without containment keeps two families") {
+            const std::vector<SeedFamilyCandidate> ranked{
+                {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+                {.hitIndices = {0, 1, 2, 9}, .residual2 = 0.2},
+            };
+            const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+            REQUIRE(families.size() == 2);
+            CHECK(families[0].primary == 0);
+            CHECK(families[1].primary == 1);
+            CHECK(families[0].fallbacks.empty());
+            CHECK(families[1].fallbacks.empty());
+          }
+'''
+          addition = anchor + r'''
+
+          SECTION("a shared three-hit subset cannot bridge unrelated primaries") {
+            const std::vector<SeedFamilyCandidate> ranked{
+                {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+                {.hitIndices = {0, 1, 2, 9}, .residual2 = 0.2},
+                {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+            };
+            const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+            REQUIRE(families.size() == 2);
+            CHECK(families[0].primary == 0);
+            CHECK(families[1].primary == 1);
+            CHECK(families[0].fallbacks.size() + families[1].fallbacks.size() == 1);
+          }
+
+          SECTION("all family primaries are ordered before every fallback") {
+            const std::vector<SeedFamilyCandidate> ranked{
+                {.hitIndices = {0, 1, 2, 3}, .residual2 = 0.1},
+                {.hitIndices = {0, 1, 2}, .residual2 = 0.0},
+                {.hitIndices = {10, 11, 12, 13}, .residual2 = 0.2},
+                {.hitIndices = {10, 11, 12}, .residual2 = 0.0},
+            };
+            const auto families = selectB0SeedFamilies(ranked, 2, 20, 2, 20, identity);
+            const auto order = eicrecon::b0stub::seedFamilyEmissionOrder(families);
+            REQUIRE(order.size() == 4);
+            CHECK(order[0].candidate == 0);
+            CHECK_FALSE(order[0].fallback);
+            CHECK(order[1].candidate == 2);
+            CHECK_FALSE(order[1].fallback);
+            CHECK(order[2].candidate == 1);
+            CHECK(order[2].fallback);
+            CHECK(order[3].candidate == 3);
+            CHECK(order[3].fallback);
+          }
+'''
+          if anchor not in text:
+            raise SystemExit('expected test anchor not found')
+          text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+          PY
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/algorithms/tracking/B0TrackerStubSeeder.h \
+                  src/algorithms/tracking/B0TrackerStubSeeder.cc \
+                  src/tests/algorithms_test/tracking_B0TrackerStubSeeder.cc
+          git commit -m 'fix(tracking): make B0 seed families primary-anchored'
+          git push origin HEAD:feat/b0-seed-families
