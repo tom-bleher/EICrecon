@@ -37,9 +37,12 @@
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <set>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ActsGeometryProvider.h"
 #include "extensions/spdlog/SpdlogToActs.h"
@@ -109,7 +112,9 @@ private:
 
 void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::string material_file,
                                       std::shared_ptr<spdlog::logger> log,
-                                      std::shared_ptr<spdlog::logger> init_log) {
+                                      std::shared_ptr<spdlog::logger> init_log,
+                                      bool require_material_coverage,
+                                      std::vector<unsigned int> required_material_extra_ids) {
   // LOGGING
   m_log      = log;
   m_init_log = init_log;
@@ -126,6 +131,18 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
   auto acts_init_log_level = eicrecon::SpdlogToActsLevel(m_init_log->level());
 
   m_dd4hepDetector = dd4hep_geo;
+
+  std::set<unsigned int> requiredMaterialExtras;
+  for (const auto value : required_material_extra_ids) {
+    if (value > 0xffU) {
+      throw std::invalid_argument("Required ACTS material detector ID exceeds the 8-bit extra field");
+    }
+    requiredMaterialExtras.insert(value);
+  }
+  if (require_material_coverage && requiredMaterialExtras.empty()) {
+    throw std::invalid_argument(
+        "Strict ACTS material coverage requires at least one explicit detector extra ID");
+  }
 
   // Load ACTS materials maps
   std::shared_ptr<const Acts::IMaterialDecorator> materialDeco{nullptr};
@@ -155,7 +172,7 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
       }
       // set 8-bit extra field to 8-bit DD4hep detector ID
       return identifier.withExtra(0xff & dd4hep_det_element->identifier());
-    };
+    }
   };
   auto geometryIdHook = std::make_shared<ConvertDD4hepDetectorGeometryIdentifierHook>();
 
@@ -183,9 +200,60 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
 
   m_init_log->info("DD4Hep geometry converted!");
 
-  // Report layers that were visited but never had material assigned
+  // Keep the historical detector-wide diagnostic, even when strict selective
+  // validation is disabled.
   if (auto epicDeco = std::dynamic_pointer_cast<const EpicJsonMaterialDecorator>(materialDeco)) {
     epicDeco->check();
+  }
+
+  // Optional production-validation contract. Check final ACTS surface IDs after
+  // the DD4hep geometry-ID hook has run. The service supplies explicit detector
+  // IDs; no detector name is hard-coded here.
+  if (require_material_coverage) {
+    if (!m_trackingGeo) {
+      throw std::runtime_error("Strict ACTS material coverage requested without a tracking geometry");
+    }
+    std::map<unsigned int, std::size_t> requiredSurfaces;
+    std::map<unsigned int, std::size_t> materialSurfaces;
+    std::vector<Acts::GeometryIdentifier> missing;
+    m_trackingGeo->visitSurfaces([&](const Acts::Surface* surface) {
+      if (surface == nullptr) {
+        return;
+      }
+      const auto id = surface->geometryId();
+      const auto extra = static_cast<unsigned int>(id.extra());
+      if (id.approach() == 0 || requiredMaterialExtras.find(extra) == requiredMaterialExtras.end()) {
+        return;
+      }
+      ++requiredSurfaces[extra];
+      if (surface->surfaceMaterial() != nullptr) {
+        ++materialSurfaces[extra];
+      } else {
+        missing.push_back(id);
+      }
+    });
+
+    for (const auto extra : requiredMaterialExtras) {
+      const auto count = requiredSurfaces[extra];
+      if (count == 0) {
+        throw std::runtime_error(fmt::format(
+            "Strict ACTS material coverage found no approach surfaces for detector extra ID {}",
+            extra));
+      }
+      m_init_log->info("strict material coverage detector extra={} material={}/{} approach surfaces",
+                       extra, materialSurfaces[extra], count);
+    }
+    for (const auto& id : missing) {
+      m_init_log->critical(
+          "Strict material coverage missing geometryId=(volume={}, boundary={}, layer={}, "
+          "approach={}, sensitive={}, extra={})",
+          id.volume(), id.boundary(), id.layer(), id.approach(), id.sensitive(), id.extra());
+    }
+    if (!missing.empty()) {
+      throw std::runtime_error(fmt::format(
+          "Strict ACTS material coverage failed: {} required approach surfaces have no material",
+          missing.size()));
+    }
   }
 
   // Visit surfaces
