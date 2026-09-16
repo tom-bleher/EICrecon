@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (C) 2026 ePIC Collaboration
 #include "B0TelescopeTruthSeeding.h"
+#include "B0MeasurementTruth.h"
 #include "algorithms/interfaces/ActsSvc.h"
 #include "algorithms/interfaces/UniqueIDGenSvc.h"
 #include "services/particle/ParticleSvc.h"
@@ -73,25 +74,18 @@ void B0TelescopeTruthSeeding::process(const Input& input, const Output& output) 
     if (!ion.allFinite()) { ++unmapped; continue; }
     crossings[objectId(particle)].push_back({h, surface->geometryId().value(), ion.z()});
   }
-  std::map<Id, std::map<Id, double>> rawVotes;
+  b0::RawTruthVotes rawVotes;
   for (const auto& a : *associations) {
+    const double weight = a.getWeight();
+    if (!std::isfinite(weight) || weight < 0) throw std::runtime_error("Invalid B0 raw association");
     const auto particle = a.getSimHit().getParticle();
-    if (particle.isAvailable() && std::isfinite(a.getWeight()) && a.getWeight() > 0)
-      rawVotes[objectId(a.getRawHit())][objectId(particle)] += a.getWeight();
+    if (particle.isAvailable() && weight > 0)
+      rawVotes[objectId(a.getRawHit())][objectId(particle)] += weight;
   }
   std::map<Id, std::map<std::uint64_t, std::pair<double, std::size_t>>> matched;
   for (std::size_t i = 0; i < measurements->size(); ++i) {
-    const auto m = (*measurements)[i]; std::map<Id, double> votes;
-    for (const auto& h : m.getHits()) {
-      const auto found = rawVotes.find(objectId(h.getRawHit()));
-      if (found == rawVotes.end()) continue;
-      double total = 0; for (const auto& [id, w] : found->second) { (void)id; total += w; }
-      if (total <= 0) continue;
-      for (const auto& [id, w] : found->second) votes[id] += w / total;
-    }
-    if (m.hits_size() == 0) continue;
-    for (const auto& [id, weight] : votes) {
-      const double purity = weight / m.hits_size();
+    const auto m = (*measurements)[i];
+    for (const auto& [id, purity] : b0::measurementTruth(m, rawVotes)) {
       if (purity <= m_cfg.measurementPurityMin) continue;
       auto& bySurface = matched[id]; const auto previous = bySurface.find(m.getSurface());
       if (previous == bySurface.end() || purity > previous->second.first)

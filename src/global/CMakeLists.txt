@@ -1,5 +1,6 @@
 add_subdirectory(tracking)
 add_subdirectory(b0_telescope)
+add_subdirectory(b0_aclgad)
 add_subdirectory(reco)
 add_subdirectory(particle_flow)
 add_subdirectory(pid)

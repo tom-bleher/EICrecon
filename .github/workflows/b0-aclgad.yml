@@ -1,0 +1,32 @@
+name: B0 AC-LGAD dependency-light tests
+on:
+  pull_request:
+    paths:
+      - 'src/algorithms/digi/B0ACLGAD*'
+      - 'src/algorithms/tracking/B0MeasurementTruth.h'
+      - 'src/tests/b0_aclgad/**'
+      - 'src/benchmarks/reconstruction/b0_telescope/*aclgad*'
+      - 'docs/b0-aclgad/**'
+      - '.github/workflows/b0-aclgad.yml'
+permissions:
+  contents: read
+jobs:
+  kernels:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cmake -S src/tests/b0_aclgad -B build-response -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+      - run: cmake --build build-response --parallel 2
+      - run: ctest --test-dir build-response --output-on-failure
+  adapters:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s src/benchmarks/reconstruction/b0_telescope -p test_aclgad.py -v
