@@ -1,0 +1,21 @@
+name: B0 standalone tests
+on:
+  pull_request:
+    paths:
+      - 'src/algorithms/tracking/B0*'
+      - 'src/tests/b0_standalone/**'
+      - '.github/workflows/b0-standalone.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libeigen3-dev
+      - run: cmake -S src/tests/b0_standalone -B build-b0 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+      - run: cmake --build build-b0 -j2
+      - run: ctest --test-dir build-b0 --output-on-failure

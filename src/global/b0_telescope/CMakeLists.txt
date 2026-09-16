@@ -1,0 +1,8 @@
+get_filename_component(PLUGIN_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
+plugin_add(${PLUGIN_NAME} PLUGIN_USE_CC_ONLY)
+plugin_glob_all(${PLUGIN_NAME})
+plugin_add_dd4hep(${PLUGIN_NAME})
+plugin_add_acts(${PLUGIN_NAME})
+plugin_add_cern_root(${PLUGIN_NAME})
+plugin_add_event_model(${PLUGIN_NAME})
+plugin_link_libraries(${PLUGIN_NAME} algorithms_tracking_library dd4hep_library evaluator_library)
