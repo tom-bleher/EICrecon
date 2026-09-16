@@ -6,6 +6,20 @@ Upstream discussion: https://github.com/eic/EICrecon/issues/2930
 
 ## Recommended order
 
+### Priority 0 — make detector inputs trustworthy
+
+9. **[Silicon channel timing response](09-silicon-channel-timing-response.md)**
+   - Define channel-level timing semantics before enabling B0 timing cuts.
+   - Avoid multiplicity-dependent order-statistic bias from independently smeared contributions.
+   - Keep AC-LGAD-specific timing effects in the detector-response model rather than the generic fallback.
+
+10. **[B0 material-map runtime contract](10-b0-material-map-runtime-contract.md)**
+   - Distinguish geometry-declared, user-selected and fallback ACTS material maps.
+   - Add an opt-in strict geometry/map compatibility and required-surface coverage policy.
+   - Record immutable map/geometry provenance in B0 benchmarks.
+
+The confirmed channel-threshold/truth-association bug is implemented separately in PR #8 because it affects the shared `SiliconTrackerDigi` rather than only B0 tracking.
+
 ### Priority 1 — establish statistically trustworthy output
 
 1. **[Independent final weak-prior refit](01-independent-final-refit.md)**
@@ -26,7 +40,7 @@ Upstream discussion: https://github.com/eic/EICrecon/issues/2930
 4. **[Candidate building under occupancy + timing](04-candidate-building-occupancy-timing.md)**
    - Instrument and bound endpoint combinatorics.
    - Use both transverse projections earlier.
-   - Add optional time-of-flight compatibility.
+   - Add optional time-of-flight compatibility only after issue 09 is validated.
    - Replace proximity-only front/back equivalence with trajectory-aware compatibility.
 
 5. **[Charge ambiguity / zero-curvature edge cases](05-charge-ambiguity-zero-curvature.md)**
@@ -48,6 +62,11 @@ Upstream discussion: https://github.com/eic/EICrecon/issues/2930
 ## Dependencies
 
 ```text
+09 channel timing response -------> 04 validated timing compatibility
+
+10 material-map runtime contract --> 03 trustworthy benchmark provenance
+                                  --> 01/02/07 trustworthy fitted covariances
+
 01 independent final refit
         |
         +-------> 03 benchmark/pulls become statistically meaningful
@@ -71,9 +90,9 @@ Upstream discussion: https://github.com/eic/EICrecon/issues/2930
 
 Two related drafts belong primarily in the `tom-bleher/epic` fork:
 
-- validate the realistic front/back B0 surface/material mapping and reproducible ACTS material-map generation;
+- validate the realistic front/back B0 surface/material mapping and reproducible ACTS material-map generation, including sensor-to-ACTS round-trip checks and transport-sensitive material validation;
 - replace the effective 70 um readout proxy with a realistic AC-LGAD response/digitization model, coordinated with EICrecon.
 
 ## Scope principle
 
-B0-specific behavior should stay B0-specific where possible. Shared changes to `CKFTracking` should be reusable **capabilities** controlled by explicit default-off options, not implicit behavior keyed to `numB0StationsMin` or detector-name assumptions.
+B0-specific behavior should stay B0-specific where possible. Shared changes to `CKFTracking`, digitization or ACTS services should be reusable **capabilities** controlled by explicit/default-safe options, not implicit behavior keyed to detector-name assumptions.
