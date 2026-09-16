@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (C) 2026 ePIC Collaboration
 #include "B0TelescopeTrackExport.h"
+#include "B0MeasurementTruth.h"
 #include "algorithms/interfaces/ActsSvc.h"
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/EventData/SourceLink.hpp>
@@ -30,13 +31,18 @@ void B0TelescopeTrackExport::process(const Input& input, const Output& output) c
       std::make_shared<Acts::ConstVectorMultiTrajectory>(*states));
   const auto& context = m_provider->getActsGeometryContext();
   Acts::ConstProxyAccessor<unsigned int> seedColumn("seed");
-  using Id = std::pair<int, int>;
-  auto id = [](const auto& object) -> Id { return {object.getObjectID().collectionID, object.getObjectID().index}; };
-  std::map<Id, std::vector<std::pair<edm4hep::MCParticle, double>>> rawTruth;
-  for (const auto& association : *rawAssociations)
-    if (association.getSimHit().getParticle().isAvailable() &&
-        std::isfinite(association.getWeight()) && association.getWeight() > 0)
-      rawTruth[id(association.getRawHit())].push_back({association.getSimHit().getParticle(), association.getWeight()});
+  using Id = b0::TruthId;
+  b0::RawTruthVotes rawTruth;
+  std::map<Id, edm4hep::MCParticle> particles;
+  for (const auto& association : *rawAssociations) {
+    const double weight = association.getWeight();
+    if (!std::isfinite(weight) || weight < 0) throw std::runtime_error("Invalid B0 raw association");
+    const auto particle = association.getSimHit().getParticle();
+    if (!particle.isAvailable() || weight == 0) continue;
+    const auto id = b0::truthId(particle);
+    particles[id] = particle;
+    rawTruth[b0::truthId(association.getRawHit())][id] += weight;
+  }
   const std::array<double, 6> units{Acts::UnitConstants::mm, Acts::UnitConstants::mm, 1, 1,
                                     1 / Acts::UnitConstants::GeV, Acts::UnitConstants::ns};
   for (const auto& track : container) {
@@ -90,7 +96,7 @@ void B0TelescopeTrackExport::process(const Input& input, const Output& output) c
     }
     result.setTime(pars.getTime()); result.setTimeError(std::sqrt(std::max(0.0, boundCov(5, 5))));
     result.setChi2(summary.chi2Sum); result.setNdf(summary.NDF); result.setPdg(pars.getPdg());
-    std::map<Id, std::pair<edm4hep::MCParticle, double>> weights;
+    b0::TruthVotes weights;
     for (const auto& state : track.trackStatesReversed()) {
       const auto flags = state.typeFlags();
 #if Acts_VERSION_MAJOR >= 45
@@ -101,27 +107,14 @@ void B0TelescopeTrackExport::process(const Input& input, const Output& output) c
       const auto index = state.getUncalibratedSourceLink().template get<ActsExamples::IndexSourceLink>().index();
       const auto measurement = (*measurements)[index];
       result.addToMeasurements(measurement);
-      std::map<Id, std::pair<edm4hep::MCParticle, double>> local;
-      for (const auto& hit : measurement.getHits()) {
-        const auto found = rawTruth.find(id(hit.getRawHit()));
-        if (found == rawTruth.end()) continue;
-        double total = 0;
-        for (const auto& entry : found->second) total += entry.second;
-        if (!(total > 0) || !std::isfinite(total)) continue;
-        for (const auto& [particle, weight] : found->second) {
-          auto& entry = local[id(particle)]; entry.first = particle; entry.second += weight / total;
-        }
-      }
-      if (measurement.hits_size() > 0) for (const auto& [key, entry] : local) {
-        auto& sum = weights[key]; sum.first = entry.first; sum.second += entry.second / measurement.hits_size();
-      }
+      for (const auto& [id, weight] : b0::measurementTruth(measurement, rawTruth)) weights[id] += weight;
     }
-    // Unassociated hits/measurements remain in the purity denominator.
-    if (summary.nMeasurements > 0) for (const auto& [key, entry] : weights) {
-      (void)key;
-      const double weight = entry.second / summary.nMeasurements;
-      auto link = links->create(); link.setFrom(result); link.setTo(entry.first); link.setWeight(weight);
-      auto association = associations->create(); association.setRec(result); association.setSim(entry.first); association.setWeight(weight);
+    // Equal measurement weight, not equal raw-pad weight. Unassociated signal
+    // remains in the denominator even when a cluster has a small true tail.
+    if (summary.nMeasurements > 0) for (const auto& [id, sum] : weights) {
+      const double weight = sum / summary.nMeasurements;
+      auto link = links->create(); link.setFrom(result); link.setTo(particles.at(id)); link.setWeight(weight);
+      auto association = associations->create(); association.setRec(result); association.setSim(particles.at(id)); association.setWeight(weight);
     }
   }
 }
