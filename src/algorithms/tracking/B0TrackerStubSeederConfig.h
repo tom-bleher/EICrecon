@@ -143,9 +143,10 @@ struct B0TrackerStubSeederConfig {
   // CKFTracking then reconstructs 698 of 765 seeded four-station events
   // (723 with truth seeds); a wider window gains under 2 % of tracks and
   // degrades the fitted momentum. NOTE: with a material map that does not
-  // match the geometry the CKF becomes strongly window-limited; regenerate
-  // the map (epic scripts/refresh_local_material_map.sh) rather than
-  // inflating these.
+  // match the geometry the CKF becomes strongly window-limited. Regenerate and
+  // validate the map with the B0 workflow documented in ePIC
+  // scripts/material_map/readme.md; do not substitute the generic
+  // refresh_local_material_map.sh output for the geometry-matched B0 map.
   /// Scattering angle coefficient [GeV rad]: sigma = scale * |q/p| is added
   /// to theta and, divided by sin(theta), to phi.
   float scatteringScale = 3.0e-4;
