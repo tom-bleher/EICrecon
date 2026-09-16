@@ -55,8 +55,7 @@ void B0TelescopeTruthSeeding::process(const Input& input, const Output& output) 
   const auto event = (*headers)[0].getEventNumber();
   const auto& gctx = m_provider->getActsGeometryContext();
   const auto& rotation = m_geometry->labToIon();
-  const auto* converter = algorithms::GeoSvc::instance().cellIDPositionConverter();
-  if (!converter) throw std::runtime_error("Missing B0 cell-ID converter");
+  const auto converter = algorithms::GeoSvc::instance().cellIDPositionConverter();
   struct Crossing { edm4hep::SimTrackerHit hit; std::uint64_t surface; double z; };
   std::map<Id, std::vector<Crossing>> crossings;
   std::size_t unmapped = 0, invalidMomentum = 0;
@@ -74,7 +73,6 @@ void B0TelescopeTruthSeeding::process(const Input& input, const Output& output) 
     if (!ion.allFinite()) { ++unmapped; continue; }
     crossings[objectId(particle)].push_back({h, surface->geometryId().value(), ion.z()});
   }
-  // Truth association is confined to this explicitly named validation seeder.
   std::map<Id, std::map<Id, double>> rawVotes;
   for (const auto& a : *associations) {
     const auto particle = a.getSimHit().getParticle();
@@ -157,7 +155,6 @@ void B0TelescopeTruthSeeding::process(const Input& input, const Output& output) 
               << "],\"surface\":\"" << crossing.surface << "\",\"projection_mm\":" << projection
               << ",\"state\":[" << bound.getLoc().a << ',' << bound.getLoc().b << ',' << bound.getPhi() << ','
               << bound.getTheta() << ',' << bound.getQOverP() << ',' << bound.getTime() << "]}\n";
-      // No IP, eta, generator-status or production-z selection.
       if (seeded || stations.size() < m_cfg.minStations || p < m_cfg.minMomentumGeV) continue;
       const double smear = std::exp(m_cfg.relativeMomentumSmear * normal(random));
       if (!std::isfinite(smear) || smear <= 0) { ++invalidMomentum; continue; }

@@ -35,6 +35,7 @@
 #include <Eigen/Cholesky>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -86,7 +87,7 @@ struct Calibrator {
     Acts::Vector2 local(m.getLoc().a * units[0], m.getLoc().b * units[1]);
     Eigen::Matrix2d cov;
     cov << c.xx, c.xy, c.xy, c.yy; cov *= units[0] * units[0];
-    state.setUncalibratedSourceLink(link);
+    state.setUncalibratedSourceLink(Acts::SourceLink{link});
     state.allocateCalibrated(local, cov);
     state.setProjectorSubspaceIndices(std::array<std::uint8_t, 2>{0, 1});
   }
@@ -119,6 +120,7 @@ void B0TelescopeTracking::init() {
 }
 
 void B0TelescopeTracking::process(const Input& input, const Output& output) const {
+  const auto startTime = std::chrono::steady_clock::now();
   const auto [headers, seeds, measurements] = input;
   auto [outputStates, outputTracks] = output;
   if (headers->empty()) throw std::runtime_error("B0 diagnostics require EventHeader");
@@ -141,8 +143,9 @@ void B0TelescopeTracking::process(const Input& input, const Output& output) cons
     links.emplace(Acts::GeometryIdentifier{(*measurements)[i].getSurface()}, i);
   ActsExamples::IndexSourceLinkAccessor accessor; accessor.container = &links;
   Acts::GainMatrixUpdater updater;
-  Acts::MeasurementSelector selector({{Acts::GeometryIdentifier(),
-      {.etaBins = {}, .chi2CutOff = {m_cfg.chi2Cut}, .numMeasurementsCutOff = {m_cfg.maxBranchesPerSurface}}}});
+  const Acts::MeasurementSelector::Config selectorConfig{{Acts::GeometryIdentifier(),
+      {.etaBins = {}, .chi2CutOff = {m_cfg.chi2Cut}, .numMeasurementsCutOff = {m_cfg.maxBranchesPerSurface}}}};
+  Acts::MeasurementSelector selector(selectorConfig);
   using Creator = Acts::TrackStateCreator<ActsExamples::IndexSourceLinkAccessor::Iterator, Container>;
   Creator creator;
   creator.sourceLinkAccessor.connect<&ActsExamples::IndexSourceLinkAccessor::range>(&accessor);
@@ -188,8 +191,8 @@ void B0TelescopeTracking::process(const Input& input, const Output& output) cons
     }
     if (!values.allFinite() || !cov.allFinite() || cov.llt().info() != Eigen::Success) { ++invalidSeeds; continue; }
     const int pdg = m_cfg.useSeedParticleHypothesis ? std::abs(p.getPdg()) : m_cfg.particleHypothesisPdg;
-    const auto hypothesis = CKFTracking::makeParticleHypothesis(pdg);
-    Acts::BoundTrackParameters seedParameters(reference->getSharedPtr(), values, cov, hypothesis);
+    const auto fitHypothesis = CKFTracking::makeParticleHypothesis(pdg);
+    Acts::BoundTrackParameters seedParameters(reference->getSharedPtr(), values, cov, fitHypothesis);
     // Numerical initialization just upstream of the first sensor; no material
     // update here. The final fit traverses each selected measurement once.
     auto transform = reference->transform(gctx);
@@ -217,7 +220,7 @@ void B0TelescopeTracking::process(const Input& input, const Output& output) cons
       }
       if (stations.size() < m_cfg.minStations) { ++stationFailures; return; }
       if (m_cfg.promptSelection) {
-        Acts::BoundTrackParameters local(track.referenceSurface().getSharedPtr(), track.parameters(), track.covariance(), hypothesis);
+        Acts::BoundTrackParameters local(track.referenceSurface().getSharedPtr(), track.parameters(), track.covariance(), fitHypothesis);
         auto options = extrapolation; options.direction = Acts::Direction::Backward();
         const auto atOrigin = transport.propagate(local, *origin, options);
         if (!atOrigin.ok() || !atOrigin->endParameters ||
@@ -255,10 +258,10 @@ void B0TelescopeTracking::process(const Input& input, const Output& output) cons
       const auto weak = b0::weakPrior(m_cfg.weakPriorVariances, m_cfg.weakPriorScale);
       BoundCovariance prior;
       for (int i = 0; i < 6; ++i) for (int j = 0; j < 6; ++j) prior(i, j) = weak(i, j) * units[i] * units[j];
-      Acts::BoundTrackParameters start(initial.referenceSurface().getSharedPtr(), initial.parameters(), prior, hypothesis);
+      Acts::BoundTrackParameters start(initial.referenceSurface().getSharedPtr(), initial.parameters(), prior, fitHypothesis);
       Acts::KalmanFitterOptions<Acts::VectorMultiTrajectory> options(gctx, mctx, cctx, fitExtensions, propagation, reference);
       options.multipleScattering = true; options.energyLoss = true;
-      options.referenceSurfaceStrategy = Acts::TrackExtrapolationStrategy::first;
+      options.referenceSurfaceStrategy = decltype(options.referenceSurfaceStrategy)::first;
       const auto result = fitter.fit(selected.begin(), selected.end(), start, options, fittedTracks);
       if (!result.ok()) { ++refitFailures; debug("B0 independent refit failed: {}", result.error().message()); return; }
       auto track = result.value();
@@ -291,7 +294,8 @@ void B0TelescopeTracking::process(const Input& input, const Output& output) cons
       }
     }
   }
-  records << "{\"type\":\"event\",\"event\":" << event << ",\"seeds\":" << seeds->size()
+  const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+  records << "{\"type\":\"event\",\"elapsed_ms\":" << elapsedMs << ",\"event\":" << event << ",\"seeds\":" << seeds->size()
           << ",\"tracks\":" << tracks.size() << ",\"invalid_seeds\":" << invalidSeeds
           << ",\"finding_failures\":" << findingFailures << ",\"refit_failures\":" << refitFailures
           << ",\"changed_measurement_sets\":" << changedSets << ",\"station_failures\":" << stationFailures
