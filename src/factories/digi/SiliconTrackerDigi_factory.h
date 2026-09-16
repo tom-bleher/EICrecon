@@ -26,8 +26,11 @@ private:
   PodioOutput<edm4eic::MCRecoTrackerHitLink> m_links_output{this};
   PodioOutput<edm4eic::MCRecoTrackerHitAssociation> m_assoc_output{this};
 
-  ParameterRef<double> m_threshold{this, "threshold", config().threshold};
-  ParameterRef<double> m_timeResolution{this, "timeResolution", config().timeResolution};
+  ParameterRef<double> m_threshold{this, "threshold", config().threshold,
+                                   "channel threshold after summing SimTrackerHit energy deposits"};
+  ParameterRef<double> m_timeResolution{
+      this, "timeResolution", config().timeResolution,
+      "Gaussian channel-time sigma [ns], applied once after choosing the earliest unsmeared contribution"};
 
 public:
   void Configure() {

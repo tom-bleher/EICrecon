@@ -10,8 +10,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -24,12 +26,40 @@ namespace eicrecon {
 namespace {
 struct CellAccumulator {
   double energyDeposit{0.0};
-  std::int32_t earliestTimeStamp{0};
-  bool hasTimeStamp{false};
+  double earliestTrueTime{0.0};
+  bool hasTime{false};
 };
+
+std::int32_t channelTimeStamp(std::uint64_t event_seed, std::uint64_t cell_id,
+                              double true_time, double time_resolution) {
+  // Give every channel its own deterministic random stream. This keeps the
+  // reported time independent of SimTrackerHit insertion order and of how many
+  // other cells happen to be present in the event.
+  std::seed_seq seed_sequence{static_cast<std::uint32_t>(event_seed),
+                              static_cast<std::uint32_t>(event_seed >> 32),
+                              static_cast<std::uint32_t>(cell_id),
+                              static_cast<std::uint32_t>(cell_id >> 32)};
+  std::default_random_engine generator(seed_sequence);
+  std::normal_distribution<double> gaussian;
+  const double measured_time = true_time + gaussian(generator) * time_resolution;
+  const double timestamp_ps  = measured_time * 1.0e3;
+  if (!std::isfinite(timestamp_ps) ||
+      timestamp_ps < static_cast<double>(std::numeric_limits<std::int32_t>::min()) ||
+      timestamp_ps > static_cast<double>(std::numeric_limits<std::int32_t>::max())) {
+    throw std::overflow_error("SiliconTrackerDigi channel timestamp is outside int32 ps range");
+  }
+  return static_cast<std::int32_t>(std::llround(timestamp_ps));
+}
 } // namespace
 
-void SiliconTrackerDigi::init() {}
+void SiliconTrackerDigi::init() {
+  if (!std::isfinite(m_cfg.threshold) || m_cfg.threshold < 0.0) {
+    throw std::invalid_argument("SiliconTrackerDigi threshold must be finite and non-negative");
+  }
+  if (!std::isfinite(m_cfg.timeResolution) || m_cfg.timeResolution < 0.0) {
+    throw std::invalid_argument("SiliconTrackerDigi timeResolution must be finite and non-negative");
+  }
+}
 
 void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
                                  const SiliconTrackerDigi::Output& output) const {
@@ -37,24 +67,17 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
   const auto [headers, sim_hits]       = input;
   auto [raw_hits, links, associations] = output;
 
-  // local random generator
-  auto seed = m_uid.getUniqueID(*headers, name());
-  std::default_random_engine generator(seed);
-  std::normal_distribution<double> gaussian;
+  const auto event_seed = static_cast<std::uint64_t>(m_uid.getUniqueID(*headers, name()));
 
-  // Accumulate the complete signal in each readout cell before applying the
-  // electronics threshold. Thresholding individual simulation contributions
-  // loses a channel whose summed signal is above threshold and can make truth
-  // associations inconsistent with the emitted raw charge.
+  // Accumulate the complete signal and the deterministic physical first-arrival
+  // time in each readout cell before applying electronics effects. The generic
+  // timing model is deliberately simple: earliest unsmeared contribution plus
+  // one Gaussian channel-level measurement error. Detector-specific time walk,
+  // pulse shaping, threshold crossing and common-clock effects belong in a
+  // detector response model (for example the opt-in B0 AC-LGAD chain).
   std::unordered_map<std::uint64_t, CellAccumulator> cell_hit_map;
 
   for (const auto& sim_hit : *sim_hits) {
-
-    // time smearing
-    double time_smearing = gaussian(generator) * m_cfg.timeResolution;
-    double result_time   = sim_hit.getTime() + time_smearing;
-    auto hit_time_stamp  = (std::int32_t)(result_time * 1e3);
-
     debug("--------------------");
     debug("Hit cellID   = {}", sim_hit.getCellID());
     debug("   position  = ({:.2f}, {:.2f}, {:.2f})", sim_hit.getPosition().x,
@@ -65,16 +88,18 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
     debug("   edep = {:.2f}", sim_hit.getEDep());
     debug("   time = {:.4f}[ns]", sim_hit.getTime());
     debug("   particle time = {}[ns]", sim_hit.getParticle().getTime());
-    debug("   time smearing: {:.4f}, resulting time = {:.4f} [ns]", time_smearing, result_time);
-    debug("   hit_time_stamp: {} [~ps]", hit_time_stamp);
+
+    if (!std::isfinite(sim_hit.getTime())) {
+      throw std::invalid_argument("SiliconTrackerDigi received a non-finite SimTrackerHit time");
+    }
 
     auto& cell = cell_hit_map[sim_hit.getCellID()];
     cell.energyDeposit += sim_hit.getEDep();
-    if (!cell.hasTimeStamp) {
-      cell.earliestTimeStamp = hit_time_stamp;
-      cell.hasTimeStamp      = true;
+    if (!cell.hasTime) {
+      cell.earliestTrueTime = sim_hit.getTime();
+      cell.hasTime          = true;
     } else {
-      cell.earliestTimeStamp = std::min(cell.earliestTimeStamp, hit_time_stamp);
+      cell.earliestTrueTime = std::min(cell.earliestTrueTime, static_cast<double>(sim_hit.getTime()));
     }
   }
 
@@ -84,9 +109,17 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
             cell.energyDeposit, m_cfg.threshold / dd4hep::keV);
       continue;
     }
+    if (!cell.hasTime) {
+      throw std::logic_error("SiliconTrackerDigi accumulated a signal without a channel time");
+    }
+
+    const auto hit_time_stamp =
+        channelTimeStamp(event_seed, cell_id, cell.earliestTrueTime, m_cfg.timeResolution);
+    debug("Cell {} earliest true time {:.4f} ns -> channel timestamp {} ps", cell_id,
+          cell.earliestTrueTime, hit_time_stamp);
 
     edm4eic::MutableRawTrackerHit raw_hit_value{
-        cell_id, (std::int32_t)std::llround(cell.energyDeposit * 1e6), cell.earliestTimeStamp};
+        cell_id, static_cast<std::int32_t>(std::llround(cell.energyDeposit * 1e6)), hit_time_stamp};
     raw_hits->push_back(raw_hit_value);
     auto raw_hit = raw_hits->at(raw_hits->size() - 1);
 
