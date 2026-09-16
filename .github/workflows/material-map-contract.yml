@@ -1,0 +1,42 @@
+name: material-map-contract
+
+on:
+  pull_request:
+    paths:
+      - "src/services/geometry/acts/MaterialMapContract.h"
+      - "src/tests/material_map_contract/**"
+      - ".github/workflows/material-map-contract.yml"
+  push:
+    branches:
+      - "feat/acts-material-map-contract"
+    paths:
+      - "src/services/geometry/acts/MaterialMapContract.h"
+      - "src/tests/material_map_contract/**"
+      - ".github/workflows/material-map-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select compiler
+        run: |
+          if [[ "${{ matrix.compiler }}" == "clang" ]]; then
+            echo "CC=clang" >> "$GITHUB_ENV"
+            echo "CXX=clang++" >> "$GITHUB_ENV"
+          else
+            echo "CC=gcc" >> "$GITHUB_ENV"
+            echo "CXX=g++" >> "$GITHUB_ENV"
+          fi
+      - name: Configure
+        run: cmake -S src/tests/material_map_contract -B build/material-map-contract -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/material-map-contract --parallel 2
+      - name: Test
+        run: ctest --test-dir build/material-map-contract --output-on-failure

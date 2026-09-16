@@ -24,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace dd4hep::rec {
 class Surface;
@@ -45,7 +46,9 @@ public:
 
   virtual void initialize(const dd4hep::Detector* dd4hep_geo, std::string material_file,
                           std::shared_ptr<spdlog::logger> log,
-                          std::shared_ptr<spdlog::logger> init_log) final;
+                          std::shared_ptr<spdlog::logger> init_log,
+                          bool require_material_coverage = false,
+                          std::vector<unsigned int> required_material_extra_ids = {}) final;
 
   const dd4hep::Detector* dd4hepDetector() const { return m_dd4hepDetector; }
 
