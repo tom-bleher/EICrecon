@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (C) 2026 ePIC Collaboration
-
 #pragma once
 
 #include <Acts/EventData/TrackStateType.hpp>
@@ -11,24 +10,22 @@
 #include <utility>
 #include <vector>
 
-#include "B0TrackerStubSeeder.h"
+#include "B0StationMap.h"
 
 namespace eicrecon {
-
 using B0SurfaceStationMap = std::unordered_map<std::uint64_t, unsigned int>;
 
-/// Use physical station positions, independent of ACTS volume/layer numbering.
 inline B0SurfaceStationMap
 makeB0SurfaceStationMap(const std::vector<std::pair<std::uint64_t, double>>& surfaceZ, double gap) {
-  std::vector<double> positions;
+  std::vector<b0::StationMap::Surface> surfaces;
+  surfaces.reserve(surfaceZ.size());
   for (const auto& [id, z] : surfaceZ) {
-    positions.push_back(z);
+    surfaces.push_back({id, z});
   }
-  const auto stations = b0stub::clusterStations(positions, gap);
+  const b0::StationMap map(std::move(surfaces), gap);
   B0SurfaceStationMap result;
-  for (const auto& [id, z] : surfaceZ) {
-    const int station = b0stub::assignStation(z, stations, gap);
-    if (station >= 0) {
+  for (std::size_t station = 0; station < map.stations().size(); ++station) {
+    for (const auto id : map.stations()[station].surfaces) {
       result.emplace(id, static_cast<unsigned int>(station));
     }
   }
@@ -40,10 +37,9 @@ struct B0TrackStationCounts {
   std::size_t unmappedMeasurements{};
 };
 
-/// Count only the fitted measurements, excluding holes, outliers and material states.
 template <typename Track>
 B0TrackStationCounts countB0TrackStations(const Track& track,
-                                          const B0SurfaceStationMap& stationMap) {
+                                         const B0SurfaceStationMap& stationMap) {
   std::set<unsigned int> stations;
   std::size_t unmapped = 0;
   for (const auto& state : track.trackStatesReversed()) {
@@ -66,5 +62,4 @@ B0TrackStationCounts countB0TrackStations(const Track& track,
   }
   return {stations.size(), unmapped};
 }
-
 } // namespace eicrecon
