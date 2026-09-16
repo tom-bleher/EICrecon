@@ -21,8 +21,13 @@ DIR/b0_tracking_validation.pdf. Reconstruction options are the B0 defaults;
 this script must not change seeder or CKF parameters.
 
 By default reconstruction uses the ACTS material map declared by the loaded
-DD4hep detector configuration. Set ACTS_MATERIAL_MAP only for an intentional
-diagnostic override; the override is recorded in provenance.
+DD4hep detector configuration and enables the strict runtime contract:
+  * selected map content must match the geometry-declared map;
+  * all B0 approach surfaces must have ACTS material.
+Set B0_STRICT_MATERIAL_MAP=0 only for an intentional diagnostic run. Set
+ACTS_MATERIAL_MAP only for an intentional map override; in strict mode an old or
+different override is rejected. ACTS_MATERIAL_MAP_SHA256 can additionally pin
+an expected 64-hex content digest. All settings are recorded in provenance.
 EOF
 }
 
@@ -59,10 +64,34 @@ sha_file() {
   fi
 }
 
+resolve_detector_asset() {
+  local file=$1
+  if [[ -z ${file} ]]; then
+    echo ""
+  elif [[ -f ${file} ]]; then
+    realpath "${file}"
+  elif [[ -n ${DETECTOR_PATH:-} && -f ${DETECTOR_PATH}/${file} ]]; then
+    realpath "${DETECTOR_PATH}/${file}"
+  else
+    echo ""
+  fi
+}
+
 DETECTOR_CONFIG_NAME=${DETECTOR_CONFIG:-epic_ip6_extended}
 COMPACT_FILE=${DETECTOR_PATH:-}/${DETECTOR_CONFIG_NAME}.xml
 MATERIAL_MAP_OVERRIDE=${ACTS_MATERIAL_MAP:-}
+EXPECTED_MATERIAL_MAP_SHA256=${ACTS_MATERIAL_MAP_SHA256:-}
+STRICT_MATERIAL_MAP=${B0_STRICT_MATERIAL_MAP:-1}
 GEOMETRY_DECLARED_MATERIAL_MAP=""
+
+if [[ ${STRICT_MATERIAL_MAP} != 0 && ${STRICT_MATERIAL_MAP} != 1 ]]; then
+  echo "B0_STRICT_MATERIAL_MAP must be 0 or 1" >&2
+  exit 2
+fi
+if [[ -n ${EXPECTED_MATERIAL_MAP_SHA256} && ! ${EXPECTED_MATERIAL_MAP_SHA256} =~ ^[0-9A-Fa-f]{64}$ ]]; then
+  echo "ACTS_MATERIAL_MAP_SHA256 must be exactly 64 hexadecimal digits" >&2
+  exit 2
+fi
 
 # The generated ePIC XML contains the material-map constant when the selected
 # detector configuration declares a validated map. Read it for provenance only;
@@ -87,6 +116,8 @@ else
   MATERIAL_MAP_POLICY="geometry-declared map"
   MATERIAL_MAP_SELECTED=${GEOMETRY_DECLARED_MATERIAL_MAP:-geometry-declared}
 fi
+MATERIAL_MAP_SELECTED_RESOLVED=$(resolve_detector_asset "${MATERIAL_MAP_SELECTED}")
+GEOMETRY_MATERIAL_MAP_RESOLVED=$(resolve_detector_asset "${GEOMETRY_DECLARED_MATERIAL_MAP}")
 
 {
   echo "{"
@@ -98,10 +129,16 @@ fi
   echo "  \"compact_file\": \"${COMPACT_FILE}\","
   echo "  \"beamline_field_file\": \"compact/fields/beamline_18x275.xml (included by generated epic_ip6_extended.xml; B0PF_Bmax matches beamline_5x41.xml)\","
   echo "  \"material_map_policy\": \"${MATERIAL_MAP_POLICY}\","
+  echo "  \"strict_material_map_contract\": $([[ ${STRICT_MATERIAL_MAP} == 1 ]] && echo true || echo false),"
+  echo "  \"strict_required_detector_constant\": \"B0Tracker_Station_1_ID\","
   echo "  \"geometry_declared_material_map\": \"${GEOMETRY_DECLARED_MATERIAL_MAP:-unknown}\","
+  echo "  \"geometry_declared_material_map_resolved\": \"${GEOMETRY_MATERIAL_MAP_RESOLVED}\","
+  echo "  \"geometry_declared_material_map_sha256\": \"$(sha_file "${GEOMETRY_MATERIAL_MAP_RESOLVED}")\","
   echo "  \"material_map_override\": \"${MATERIAL_MAP_OVERRIDE}\","
   echo "  \"material_map_selected\": \"${MATERIAL_MAP_SELECTED}\","
-  echo "  \"material_map_override_sha256\": \"$(sha_file "${MATERIAL_MAP_OVERRIDE}")\","
+  echo "  \"material_map_selected_resolved\": \"${MATERIAL_MAP_SELECTED_RESOLVED}\","
+  echo "  \"material_map_selected_sha256\": \"$(sha_file "${MATERIAL_MAP_SELECTED_RESOLVED}")\","
+  echo "  \"expected_material_map_sha256\": \"${EXPECTED_MATERIAL_MAP_SHA256}\","
   echo "  \"eicrecon\": \"$(command -v eicrecon 2>/dev/null || echo missing)\","
   echo "  \"eicrecon_version\": \"$(eicrecon --version 2>/dev/null | tr '\n' ' ' || echo unknown)\","
   echo "  \"station_definition\": \"ion-frame z single-linkage clustering, gap 50 mm, min 3 physical stations\","
@@ -124,6 +161,16 @@ if [[ -n ${SIM} ]]; then
     -Ppodio:output_file="${RECO}"
     -Ppodio:output_collections=MCParticles,B0TrackerHits,B0TrackerRecHits,B0TrackerRawHitAssociations,B0TrackerSeeds,B0TrackerSeedParameters,B0TrackerCKFTracks,B0TrackerCKFTrackParameters,B0TrackerCKFTrackAssociations,B0TrackerCKFTrajectories,B0TrackerCKFTruthSeededTracks,B0TrackerCKFTruthSeededTrackParameters,B0TrackerCKFTruthSeededTrackAssociations
   )
+  if [[ ${STRICT_MATERIAL_MAP} == 1 ]]; then
+    eicrecon_args+=(
+      -Pacts:RequireGeometryMaterialMap=true
+      -Pacts:RequireMaterialCoverage=true
+      -Pacts:RequiredMaterialDetectorConstants=B0Tracker_Station_1_ID
+    )
+  fi
+  if [[ -n ${EXPECTED_MATERIAL_MAP_SHA256} ]]; then
+    eicrecon_args+=(-Pacts:ExpectedMaterialMapSHA256="${EXPECTED_MATERIAL_MAP_SHA256}")
+  fi
   if [[ -n ${MATERIAL_MAP_OVERRIDE} ]]; then
     eicrecon_args+=(-Pacts:MaterialMap="${MATERIAL_MAP_OVERRIDE}")
   fi
