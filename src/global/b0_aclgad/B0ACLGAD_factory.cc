@@ -147,11 +147,11 @@ void B0ACLGAD_factory::Process(int32_t, uint64_t) {
   }
   for (const auto& cluster : response.clusters) {
     const auto& binding = m_bindings.at(cluster.sensor);
-    const auto local = binding.origin + binding.jacobian * Acts::Vector2(cluster.x, cluster.y);
+    const Acts::Vector2 local = binding.origin + binding.jacobian * Acts::Vector2(cluster.x, cluster.y);
     Eigen::Matrix2d covariance;
     covariance << cluster.xx, cluster.xy, cluster.xy, cluster.yy;
     covariance = (binding.jacobian * covariance * binding.jacobian.transpose()).eval();
-    const auto cross = binding.jacobian * Acts::Vector2(cluster.xt, cluster.yt);
+    const Acts::Vector2 cross = binding.jacobian * Acts::Vector2(cluster.xt, cluster.yt);
     auto measurement = m_measurements()->create(); measurement.setSurface(binding.surface->geometryId().value());
     measurement.setLoc({static_cast<float>(local.x()), static_cast<float>(local.y())});
     measurement.setTime(cluster.time);
