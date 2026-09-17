@@ -4,33 +4,59 @@
 #pragma once
 
 #include <Acts/EventData/TrackStateType.hpp>
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <set>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include "B0TrackerStubSeeder.h"
 
 namespace eicrecon {
 
 using B0SurfaceStationMap = std::unordered_map<std::uint64_t, unsigned int>;
 
 /// Use physical station positions, independent of ACTS volume/layer numbering.
+/// Positions are sensor-surface centres in the ion frame [mm]. Consecutive
+/// positions separated by at most gap belong to the same physical station.
 inline B0SurfaceStationMap
 makeB0SurfaceStationMap(const std::vector<std::pair<std::uint64_t, double>>& surfaceZ, double gap) {
-  std::vector<double> positions;
-  for (const auto& [id, z] : surfaceZ) {
-    positions.push_back(z);
+  if (!std::isfinite(gap) || gap <= 0.0) {
+    throw std::invalid_argument("B0 station gap must be finite and positive");
   }
-  const auto stations = b0stub::clusterStations(positions, gap);
-  B0SurfaceStationMap result;
+
+  // Repeated identical surfaces are harmless; conflicting identities are not.
+  std::map<std::uint64_t, double> uniqueSurfaces;
   for (const auto& [id, z] : surfaceZ) {
-    const int station = b0stub::assignStation(z, stations, gap);
-    if (station >= 0) {
-      result.emplace(id, static_cast<unsigned int>(station));
+    if (!std::isfinite(z)) {
+      throw std::invalid_argument("B0 surface centre must be finite");
     }
+    const auto [it, inserted] = uniqueSurfaces.emplace(id, z);
+    if (!inserted && it->second != z) {
+      throw std::invalid_argument("A B0 surface ID has conflicting positions");
+    }
+  }
+
+  std::vector<std::pair<std::uint64_t, double>> surfaces(uniqueSurfaces.begin(),
+                                                        uniqueSurfaces.end());
+  std::sort(surfaces.begin(), surfaces.end(), [](const auto& a, const auto& b) {
+    return a.second != b.second ? a.second < b.second : a.first < b.first;
+  });
+
+  B0SurfaceStationMap result;
+  result.reserve(surfaces.size());
+  unsigned int station = 0;
+  double previousZ = 0.0;
+  for (const auto& [id, z] : surfaces) {
+    if (!result.empty() && z - previousZ > gap) {
+      ++station;
+    }
+    // Retain membership from clustering rather than reassigning by position.
+    result.emplace(id, station);
+    previousZ = z;
   }
   return result;
 }
