@@ -20,5 +20,9 @@ struct CKFTrackingConfig {
   // Disabled for central tracking; B0 requires independent physical stations.
   std::size_t numB0StationsMin = 0;
   double b0StationZGap         = 50.0; // mm in the ion frame, matching B0 stub seeding
+  // Retain CKF-rejected candidates and find-failure markers in the unfiltered
+  // output for diagnostics. Off by default: keeping rejects costs runtime and
+  // memory, so production jobs leave this disabled.
+  bool keepB0CKFDiagnostics = false;
 };
 } // namespace eicrecon

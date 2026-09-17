@@ -81,16 +81,9 @@ void ActsToTracks::process(const Input& input, const Output& output) const {
   // are converted, so EDM output matches a CKF that drops rejects. Containers
   // without the column keep every row exactly as before.
   Acts::ConstProxyAccessor<unsigned int> ckfStatus(b0counters::ckfdiag::kStatusColumn);
-  bool haveCkfStatus = false;
-  for (const auto& track : acts_track_container) {
-    try {
-      (void)ckfStatus(track);
-      haveCkfStatus = true;
-    } catch (...) {
-      haveCkfStatus = false;
-    }
-    break;
-  }
+  // hasColumn also covers empty containers, where probing a first track is impossible.
+  const bool haveCkfStatus =
+      acts_track_container.hasColumn(b0counters::ckfdiag::kStatusColumn);
 
   // Loop over tracks
   for (const auto& track : acts_track_container) {
@@ -100,7 +93,7 @@ void ActsToTracks::process(const Input& input, const Output& output) const {
         status = ckfStatus(track);
       } catch (...) {
       }
-      if (status != b0counters::ckfdiag::kAccepted) {
+      if (!b0counters::ckfdiag::resolveRow(true, status)) {
         continue;
       }
     }

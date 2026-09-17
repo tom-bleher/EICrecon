@@ -325,7 +325,8 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   // AmbiguitySolver and ActsToTracks skip non-accepted rows, so filtered
   // collections and all EDM products are unchanged. Gated on
   // numB0StationsMin so central tracking containers are bit-identical.
-  const bool keepCkfRejected = m_cfg.numB0StationsMin > 0;
+  const bool keepCkfRejected =
+      m_cfg.numB0StationsMin > 0 && m_cfg.keepB0CKFDiagnostics;
   if (keepCkfRejected) {
     acts_tracks.addColumn<unsigned int>(b0counters::ckfdiag::kStatusColumn);
     acts_tracks.addColumn<unsigned int>(b0counters::ckfdiag::kFindErrColumn);

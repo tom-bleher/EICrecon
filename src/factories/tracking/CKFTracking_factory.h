@@ -49,6 +49,9 @@ private:
   ParameterRef<std::size_t> m_numB0StationsMin{
       this, "NumB0StationsMin", config().numB0StationsMin,
       "Minimum distinct B0 stations with fitted measurements (0 disables)"};
+  ParameterRef<bool> m_b0KeepCKFDiagnostics{
+      this, "B0KeepCKFDiagnostics", config().keepB0CKFDiagnostics,
+      "Retain CKF-rejected candidates and find-failure markers (B0 diagnostics)"};
   ParameterRef<double> m_b0StationZGap{this, "B0StationZGap", config().b0StationZGap,
                                        "Maximum ion-frame z gap within one B0 station [mm]"};
 

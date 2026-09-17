@@ -90,6 +90,13 @@ inline unsigned findErrorClass(unsigned packed) { return packed / 1000u; }
 
 inline unsigned findErrorValue(unsigned packed) { return packed % 1000u; }
 
+// Whether a row enters ambiguity resolution / EDM conversion: every row when
+// the container carries no ckf_status column (central tracking, older files),
+// otherwise only accepted candidates. Unit-tested in tracking_B0CKFDiagnostics.
+inline bool resolveRow(bool haveStatusColumn, unsigned status) {
+  return !haveStatusColumn || status == kAccepted;
+}
+
 } // namespace ckfdiag
 
 /// "stub" for the data-driven chain, "truth" for the truth-seeded chain.
