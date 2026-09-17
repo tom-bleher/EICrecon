@@ -77,16 +77,7 @@ void AmbiguitySolver::process(const Input& input, const Output& output) const {
   // without the column (central tracking, older files, unit tests) resolve
   // every row exactly as before.
   Acts::ConstProxyAccessor<unsigned int> ckfStatus(b0counters::ckfdiag::kStatusColumn);
-  bool haveCkfStatus = false;
-  for (const auto& track : input_trks) {
-    try {
-      (void)ckfStatus(track);
-      haveCkfStatus = true;
-    } catch (...) {
-      haveCkfStatus = false;
-    }
-    break;
-  }
+  const bool haveCkfStatus = input_trks.hasColumn(b0counters::ckfdiag::kStatusColumn);
 
   Acts::GreedyAmbiguityResolution::State state;
   ActsExamples::TrackContainer acceptedTracks{std::make_shared<Acts::VectorTrackContainer>(),
@@ -94,12 +85,7 @@ void AmbiguitySolver::process(const Input& input, const Output& output) const {
   if (haveCkfStatus) {
     acceptedTracks.ensureDynamicColumns(input_trks);
     for (auto track : input_trks) {
-      unsigned status = b0counters::ckfdiag::kAccepted;
-      try {
-        status = ckfStatus(track);
-      } catch (...) {
-      }
-      if (status != b0counters::ckfdiag::kAccepted) {
+      if (ckfStatus(track) != b0counters::ckfdiag::kAccepted) {
         continue;
       }
       auto destProxy = acceptedTracks.makeTrack();
