@@ -19,6 +19,10 @@ Usage:
 Writes DIR/report.md, DIR/summary.json, DIR/provenance.json, and
 DIR/b0_tracking_validation.pdf. Reconstruction options are the B0 defaults;
 this script must not change seeder or CKF parameters.
+
+By default reconstruction uses the ACTS material map declared by the loaded
+DD4hep detector configuration. Set ACTS_MATERIAL_MAP only for an intentional
+diagnostic override; the override is recorded in provenance.
 EOF
 }
 
@@ -48,16 +52,40 @@ OUT=$(cd "${OUT}" && pwd)
 
 sha_file() {
   local file=$1
-  if [[ -f ${file} ]]; then
+  if [[ -n ${file} && -f ${file} ]]; then
     sha256sum "${file}" | awk '{print $1}'
   else
-    echo "missing"
+    echo "unresolved"
   fi
 }
 
-material_map=${ACTS_MATERIAL_MAP:-${REPO_ROOT}/calibrations/materials-map-ip6-extended-cbc0605e892b.cbor}
-if [[ ! -e ${material_map} ]]; then
-  material_map=${REPO_ROOT}/calibrations/materials-map.cbor
+DETECTOR_CONFIG_NAME=${DETECTOR_CONFIG:-epic_ip6_extended}
+COMPACT_FILE=${DETECTOR_PATH:-}/${DETECTOR_CONFIG_NAME}.xml
+MATERIAL_MAP_OVERRIDE=${ACTS_MATERIAL_MAP:-}
+GEOMETRY_DECLARED_MATERIAL_MAP=""
+
+# The generated ePIC XML contains the material-map constant when the selected
+# detector configuration declares a validated map. Read it for provenance only;
+# EICrecon itself remains the authority that loads the DD4hep geometry and map.
+if [[ -n ${DETECTOR_PATH:-} && -f ${COMPACT_FILE} ]]; then
+  GEOMETRY_DECLARED_MATERIAL_MAP=$(python3 - "${COMPACT_FILE}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(errors="replace")
+match = re.search(r'<constant\s+name=["\']material-map["\']\s+value=["\']([^"\']+)["\']', text)
+print(match.group(1) if match else "")
+PY
+)
+fi
+
+if [[ -n ${MATERIAL_MAP_OVERRIDE} ]]; then
+  MATERIAL_MAP_POLICY="explicit ACTS_MATERIAL_MAP override"
+  MATERIAL_MAP_SELECTED=${MATERIAL_MAP_OVERRIDE}
+else
+  MATERIAL_MAP_POLICY="geometry-declared map"
+  MATERIAL_MAP_SELECTED=${GEOMETRY_DECLARED_MATERIAL_MAP:-geometry-declared}
 fi
 
 {
@@ -66,11 +94,14 @@ fi
   echo "  \"eicrecon_git_describe\": \"$(git -C "${REPO_ROOT}" describe --always --dirty 2>/dev/null || echo unknown)\","
   echo "  \"detector_git_sha\": \"$(git -C "${DETECTOR_PATH:-${HOME}/eic/epic}" rev-parse HEAD 2>/dev/null || echo unknown)\","
   echo "  \"DETECTOR_PATH\": \"${DETECTOR_PATH:-}\","
-  echo "  \"DETECTOR_CONFIG\": \"${DETECTOR_CONFIG:-epic_ip6_extended}\","
-  echo "  \"compact_file\": \"${DETECTOR_PATH:-}/${DETECTOR_CONFIG:-epic_ip6_extended}.xml\","
+  echo "  \"DETECTOR_CONFIG\": \"${DETECTOR_CONFIG_NAME}\","
+  echo "  \"compact_file\": \"${COMPACT_FILE}\","
   echo "  \"beamline_field_file\": \"compact/fields/beamline_18x275.xml (included by generated epic_ip6_extended.xml; B0PF_Bmax matches beamline_5x41.xml)\","
-  echo "  \"material_map\": \"${material_map}\","
-  echo "  \"material_map_sha256\": \"$(sha_file "${material_map}")\","
+  echo "  \"material_map_policy\": \"${MATERIAL_MAP_POLICY}\","
+  echo "  \"geometry_declared_material_map\": \"${GEOMETRY_DECLARED_MATERIAL_MAP:-unknown}\","
+  echo "  \"material_map_override\": \"${MATERIAL_MAP_OVERRIDE}\","
+  echo "  \"material_map_selected\": \"${MATERIAL_MAP_SELECTED}\","
+  echo "  \"material_map_override_sha256\": \"$(sha_file "${MATERIAL_MAP_OVERRIDE}")\","
   echo "  \"eicrecon\": \"$(command -v eicrecon 2>/dev/null || echo missing)\","
   echo "  \"eicrecon_version\": \"$(eicrecon --version 2>/dev/null | tr '\n' ' ' || echo unknown)\","
   echo "  \"station_definition\": \"ion-frame z single-linkage clustering, gap 50 mm, min 3 physical stations\","
@@ -91,9 +122,11 @@ if [[ -n ${SIM} ]]; then
   export B0_TRACKING_COUNTERS_FILE=${COUNTERS}
   eicrecon_args=(
     -Ppodio:output_file="${RECO}"
-    -Pacts:MaterialMap="${material_map}"
     -Ppodio:output_collections=MCParticles,B0TrackerHits,B0TrackerRecHits,B0TrackerRawHitAssociations,B0TrackerSeeds,B0TrackerSeedParameters,B0TrackerCKFTracks,B0TrackerCKFTrackParameters,B0TrackerCKFTrackAssociations,B0TrackerCKFTrajectories,B0TrackerCKFTruthSeededTracks,B0TrackerCKFTruthSeededTrackParameters,B0TrackerCKFTruthSeededTrackAssociations
   )
+  if [[ -n ${MATERIAL_MAP_OVERRIDE} ]]; then
+    eicrecon_args+=(-Pacts:MaterialMap="${MATERIAL_MAP_OVERRIDE}")
+  fi
   if [[ ${NEVENTS} -gt 0 ]]; then
     eicrecon_args+=(-Pjana:nevents="${NEVENTS}")
   fi
