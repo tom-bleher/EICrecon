@@ -16,6 +16,7 @@
 #include <Acts/EventData/TrackStatePropMask.hpp>
 #include <Acts/Geometry/GeometryContext.hpp>
 #include <Acts/Geometry/GeometryHierarchyMap.hpp>
+#include <Acts/TrackFinding/CombinatorialKalmanFilterError.hpp>
 #include <Acts/TrackFinding/CombinatorialKalmanFilterExtensions.hpp>
 #include <Acts/Utilities/CalibrationContext.hpp>
 #include <DD4hep/Detector.h>
@@ -128,6 +129,17 @@ private:
   const edm4eic::Measurement2DCollection* m_meas2Ds;
   ActsExamples::GeometryIdMultiset<ActsExamples::IndexSourceLink> m_orderedSourceLinks;
 };
+
+/// Classify a findTracks error for per-seed diagnostics: errors raised by the
+/// CKF actor itself (update, measurement selection, max steps) versus errors
+/// propagated from navigation/propagation (stepper, navigator, material).
+inline unsigned classifyCkfFindError(const std::error_code& error) {
+  const std::error_code ckfCategory = Acts::CombinatorialKalmanFilterError::UpdateFailed;
+  if (error.category() == ckfCategory.category()) {
+    return eicrecon::b0counters::ckfdiag::kFindErrCkf;
+  }
+  return eicrecon::b0counters::ckfdiag::kFindErrPropagation;
+}
 
 } // anonymous namespace
 
@@ -306,6 +318,23 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   acts_tracks_temp.addColumn<unsigned int>("seed");
   Acts::ProxyAccessor<unsigned int> seedNumber("seed");
 
+  // B0 per-seed CKF failure diagnostics (see b0counters::ckfdiag). Every seed
+  // owns at least one row in the UNFILTERED output: accepted and CKF-rejected
+  // candidates are copied from the per-seed scratch container, and seeds with
+  // zero candidates leave a stateless marker row with the findTracks outcome.
+  // AmbiguitySolver and ActsToTracks skip non-accepted rows, so filtered
+  // collections and all EDM products are unchanged. Gated on
+  // numB0StationsMin so central tracking containers are bit-identical.
+  const bool keepCkfRejected = m_cfg.numB0StationsMin > 0;
+  if (keepCkfRejected) {
+    acts_tracks.addColumn<unsigned int>(b0counters::ckfdiag::kStatusColumn);
+    acts_tracks.addColumn<unsigned int>(b0counters::ckfdiag::kFindErrColumn);
+    acts_tracks_temp.addColumn<unsigned int>(b0counters::ckfdiag::kStatusColumn);
+    acts_tracks_temp.addColumn<unsigned int>(b0counters::ckfdiag::kFindErrColumn);
+  }
+  Acts::ProxyAccessor<unsigned int> ckfStatus(b0counters::ckfdiag::kStatusColumn);
+  Acts::ProxyAccessor<unsigned int> ckfFindErr(b0counters::ckfdiag::kFindErrColumn);
+
   const bool countB0           = m_cfg.numB0StationsMin > 0;
   const std::string_view chain = b0counters::chainFromAlgorithmName(this->name());
 
@@ -326,6 +355,21 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       debug("Track finding failed for seed {} with error {}", iseed, result.error().message());
       if (countB0) {
         b0counters::incrementCkf(chain, b0counters::CkfStat::ckfNoTrack);
+        b0counters::incrementCkf(chain, b0counters::CkfStat::ckfFindFailed);
+        const unsigned errClass = classifyCkfFindError(result.error());
+        b0counters::incrementCkf(
+            chain, errClass == b0counters::ckfdiag::kFindErrCkf
+                       ? b0counters::CkfStat::ckfFindErrCkf
+                       : b0counters::CkfStat::ckfFindErrPropagation);
+        if (keepCkfRejected) {
+          // Stateless marker so this seed still owns a diagnostic row.
+          const int errValue = result.error().value();
+          auto marker        = acts_tracks.makeTrack();
+          seedNumber(marker) = iseed;
+          ckfStatus(marker)  = b0counters::ckfdiag::kFindFailed;
+          ckfFindErr(marker) = b0counters::ckfdiag::packFindError(
+              errClass, errValue < 0 ? 0u : static_cast<unsigned>(errValue));
+        }
       }
       continue;
     }
@@ -333,6 +377,26 @@ void CKFTracking::process(const Input& input, const Output& output) const {
     // Set seed number for all found tracks
     auto& tracksForSeed         = result.value();
     std::size_t acceptedForSeed = 0;
+    // Copy a CKF-rejected candidate into the unfiltered output with its
+    // rejection reason instead of dropping it. Accepted tracks are handled
+    // on the success path below.
+    const auto keepRejectedCandidate = [&](auto& track, unsigned status) {
+      seedNumber(track) = iseed;
+      ckfStatus(track)  = status;
+      ckfFindErr(track) = 0;
+      auto kept         = acts_tracks.makeTrack();
+      kept.copyFrom(track);
+    };
+    if (keepCkfRejected && tracksForSeed.empty()) {
+      auto marker        = acts_tracks.makeTrack();
+      seedNumber(marker) = iseed;
+      ckfStatus(marker)  = b0counters::ckfdiag::kNoCandidates;
+      ckfFindErr(marker) =
+          b0counters::ckfdiag::packFindError(b0counters::ckfdiag::kFindErrNone, 0u);
+      if (countB0) {
+        b0counters::incrementCkf(chain, b0counters::CkfStat::ckfFindEmpty);
+      }
+    }
     for (auto& track : tracksForSeed) {
       // Check if track has at least one valid (non-outlier) measurement
       // (this check avoids errors inside smoothing and extrapolation)
@@ -342,6 +406,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         if (countB0) {
           b0counters::incrementCkf(chain, b0counters::CkfStat::ckfTooFewHits);
         }
+        if (keepCkfRejected) {
+          keepRejectedCandidate(track, b0counters::ckfdiag::kNoValidMeasurement);
+        }
         continue;
       }
 
@@ -350,6 +417,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
               track.index(), iseed, m_cfg.numMeasurementsMin);
         if (countB0) {
           b0counters::incrementCkf(chain, b0counters::CkfStat::ckfTooFewHits);
+        }
+        if (keepCkfRejected) {
+          keepRejectedCandidate(track, b0counters::ckfdiag::kTooFewHits);
         }
         continue;
       }
@@ -364,6 +434,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
           debug("Track {} for seed {} has {} B0 stations, fewer than required {}", track.index(),
                 iseed, counts.stations, m_cfg.numB0StationsMin);
           b0counters::incrementCkf(chain, b0counters::CkfStat::ckfTooFewStations);
+          if (keepCkfRejected) {
+            keepRejectedCandidate(track, b0counters::ckfdiag::kTooFewStations);
+          }
           continue;
         }
       }
@@ -374,6 +447,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
               smoothingResult.error().message());
         if (countB0) {
           b0counters::incrementCkf(chain, b0counters::CkfStat::smoothingFailure);
+        }
+        if (keepCkfRejected) {
+          keepRejectedCandidate(track, b0counters::ckfdiag::kSmoothingFailed);
         }
         continue;
       }
@@ -416,10 +492,17 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         if (countB0) {
           b0counters::incrementCkf(chain, b0counters::CkfStat::extrapolationFailure);
         }
+        if (keepCkfRejected) {
+          keepRejectedCandidate(track, b0counters::ckfdiag::kExtrapolationFailed);
+        }
         continue;
       }
 
       seedNumber(track) = iseed;
+      if (keepCkfRejected) {
+        ckfStatus(track)  = b0counters::ckfdiag::kAccepted;
+        ckfFindErr(track) = 0;
+      }
 
       // Copy accepted track into main track container
       auto acts_tracks_proxy = acts_tracks.makeTrack();

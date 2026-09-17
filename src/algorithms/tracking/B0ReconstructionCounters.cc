@@ -147,6 +147,10 @@ std::string jsonSummary() {
       "smoothingFailure",
       "extrapolationFailure",
       "tracksAccepted",
+      "ckfFindFailed",
+      "ckfFindEmpty",
+      "ckfFindErrCkf",
+      "ckfFindErrPropagation",
   };
   static constexpr std::array<std::string_view, kAmbiguityN> kAmbiguityNames{
       "tracksIn",

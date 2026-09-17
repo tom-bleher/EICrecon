@@ -5,6 +5,7 @@
 
 #include <Acts/AmbiguityResolution/GreedyAmbiguityResolution.hpp>
 #include <Acts/EventData/MeasurementHelpers.hpp>
+#include <Acts/EventData/ProxyAccessor.hpp>
 #include <Acts/EventData/SourceLink.hpp>
 #include <Acts/EventData/TrackStatePropMask.hpp>
 #include <Acts/EventData/VectorMultiTrajectory.hpp>
@@ -69,23 +70,71 @@ void AmbiguitySolver::process(const Input& input, const Output& output) const {
   auto trackContainer = std::make_shared<Acts::ConstVectorTrackContainer>(*input_tracks);
   ActsExamples::ConstTrackContainer input_trks(trackContainer, trackStateContainer);
 
+  // B0 CKF failure diagnostics (see b0counters::ckfdiag): the unfiltered input
+  // may carry CKF-rejected candidates and stateless find-failure markers.
+  // They must not enter ambiguity resolution; only accepted candidates are
+  // resolved, so the output matches a CKF that drops rejects. Containers
+  // without the column (central tracking, older files, unit tests) resolve
+  // every row exactly as before.
+  Acts::ConstProxyAccessor<unsigned int> ckfStatus(b0counters::ckfdiag::kStatusColumn);
+  bool haveCkfStatus = false;
+  for (const auto& track : input_trks) {
+    try {
+      (void)ckfStatus(track);
+      haveCkfStatus = true;
+    } catch (...) {
+      haveCkfStatus = false;
+    }
+    break;
+  }
+
   Acts::GreedyAmbiguityResolution::State state;
-  m_core->computeInitialState(input_trks, state, &sourceLinkHash, &sourceLinkEquality);
-  m_core->resolve(state);
+  ActsExamples::TrackContainer acceptedTracks{std::make_shared<Acts::VectorTrackContainer>(),
+                                              std::make_shared<Acts::VectorMultiTrajectory>()};
+  if (haveCkfStatus) {
+    acceptedTracks.ensureDynamicColumns(input_trks);
+    for (auto track : input_trks) {
+      unsigned status = b0counters::ckfdiag::kAccepted;
+      try {
+        status = ckfStatus(track);
+      } catch (...) {
+      }
+      if (status != b0counters::ckfdiag::kAccepted) {
+        continue;
+      }
+      auto destProxy = acceptedTracks.makeTrack();
+      destProxy.copyFrom(track);
+    }
+  }
 
   ActsExamples::TrackContainer solvedTracks{std::make_shared<Acts::VectorTrackContainer>(),
                                             std::make_shared<Acts::VectorMultiTrajectory>()};
-  solvedTracks.ensureDynamicColumns(input_trks);
-
-  for (auto iTrack : state.selectedTracks) {
-    auto destProxy = solvedTracks.makeTrack();
-    auto srcProxy  = input_trks.getTrack(state.trackTips.at(iTrack));
-    destProxy.copyFrom(srcProxy);
+  std::size_t nResolvedIn = 0;
+  if (!haveCkfStatus) {
+    m_core->computeInitialState(input_trks, state, &sourceLinkHash, &sourceLinkEquality);
+    m_core->resolve(state);
+    solvedTracks.ensureDynamicColumns(input_trks);
+    for (auto iTrack : state.selectedTracks) {
+      auto destProxy = solvedTracks.makeTrack();
+      auto srcProxy  = input_trks.getTrack(state.trackTips.at(iTrack));
+      destProxy.copyFrom(srcProxy);
+    }
+    nResolvedIn = input_trks.size();
+  } else {
+    m_core->computeInitialState(acceptedTracks, state, &sourceLinkHash, &sourceLinkEquality);
+    m_core->resolve(state);
+    solvedTracks.ensureDynamicColumns(acceptedTracks);
+    for (auto iTrack : state.selectedTracks) {
+      auto destProxy = solvedTracks.makeTrack();
+      auto srcProxy  = acceptedTracks.getTrack(state.trackTips.at(iTrack));
+      destProxy.copyFrom(srcProxy);
+    }
+    nResolvedIn = acceptedTracks.size();
   }
 
   if (b0counters::isB0AlgorithmName(this->name())) {
     const auto chain = b0counters::chainFromAlgorithmName(this->name());
-    const auto nIn   = input_trks.size();
+    const auto nIn   = nResolvedIn;
     const auto nOut  = solvedTracks.size();
     b0counters::incrementAmbiguity(chain, b0counters::AmbiguityStat::tracksIn, nIn);
     b0counters::incrementAmbiguity(chain, b0counters::AmbiguityStat::tracksOut, nOut);

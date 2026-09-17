@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "ActsToTracks.h"
+#include "B0ReconstructionCounters.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 
 namespace eicrecon {
@@ -74,8 +75,35 @@ void ActsToTracks::process(const Input& input, const Output& output) const {
   auto trackContainer      = std::make_shared<Acts::ConstVectorTrackContainer>(*acts_tracks);
   ActsExamples::ConstTrackContainer acts_track_container(trackContainer, trackStateContainer);
 
+  // B0 CKF failure diagnostics (see b0counters::ckfdiag): the unfiltered input
+  // may carry CKF-rejected candidates and stateless find-failure markers.
+  // They must not become EDM tracks/trajectories; only accepted candidates
+  // are converted, so EDM output matches a CKF that drops rejects. Containers
+  // without the column keep every row exactly as before.
+  Acts::ConstProxyAccessor<unsigned int> ckfStatus(b0counters::ckfdiag::kStatusColumn);
+  bool haveCkfStatus = false;
+  for (const auto& track : acts_track_container) {
+    try {
+      (void)ckfStatus(track);
+      haveCkfStatus = true;
+    } catch (...) {
+      haveCkfStatus = false;
+    }
+    break;
+  }
+
   // Loop over tracks
   for (const auto& track : acts_track_container) {
+    if (haveCkfStatus) {
+      unsigned status = b0counters::ckfdiag::kAccepted;
+      try {
+        status = ckfStatus(track);
+      } catch (...) {
+      }
+      if (status != b0counters::ckfdiag::kAccepted) {
+        continue;
+      }
+    }
     // Collect the trajectory summary info
     auto trajectoryState = Acts::MultiTrajectoryHelpers::trajectoryState(
         acts_track_container.trackStateContainer(), track.tipIndex());
