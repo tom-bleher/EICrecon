@@ -21,6 +21,14 @@
 
 namespace eicrecon {
 
+namespace {
+struct CellAccumulator {
+  double energyDeposit{0.0};
+  std::int32_t earliestTimeStamp{0};
+  bool hasTimeStamp{false};
+};
+} // namespace
+
 void SiliconTrackerDigi::init() {}
 
 void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
@@ -34,8 +42,11 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
   std::default_random_engine generator(seed);
   std::normal_distribution<double> gaussian;
 
-  // A map of unique cellIDs with temporary structure RawHit
-  std::unordered_map<std::uint64_t, edm4eic::MutableRawTrackerHit> cell_hit_map;
+  // Accumulate the complete signal in each readout cell before applying the
+  // electronics threshold. Thresholding individual simulation contributions
+  // loses a channel whose summed signal is above threshold and can make truth
+  // associations inconsistent with the emitted raw charge.
+  std::unordered_map<std::uint64_t, CellAccumulator> cell_hit_map;
 
   for (const auto& sim_hit : *sim_hits) {
 
@@ -57,49 +68,49 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
     debug("   time smearing: {:.4f}, resulting time = {:.4f} [ns]", time_smearing, result_time);
     debug("   hit_time_stamp: {} [~ps]", hit_time_stamp);
 
-    if (sim_hit.getEDep() < m_cfg.threshold) {
-      debug("  edep is below threshold of {:.2f} [keV]", m_cfg.threshold / dd4hep::keV);
-      continue;
-    }
-
-    if (!cell_hit_map.contains(sim_hit.getCellID())) {
-      // This cell doesn't have hits
-      cell_hit_map[sim_hit.getCellID()] = {
-          sim_hit.getCellID(), (std::int32_t)std::llround(sim_hit.getEDep() * 1e6),
-          hit_time_stamp // ns->ps
-      };
+    auto& cell = cell_hit_map[sim_hit.getCellID()];
+    cell.energyDeposit += sim_hit.getEDep();
+    if (!cell.hasTimeStamp) {
+      cell.earliestTimeStamp = hit_time_stamp;
+      cell.hasTimeStamp      = true;
     } else {
-      // There is previous values in the cell
-      auto& hit = cell_hit_map[sim_hit.getCellID()];
-      debug("  Hit already exists in cell ID={}, prev. hit time: {}", sim_hit.getCellID(),
-            hit.getTimeStamp());
-
-      // keep earliest time for hit
-      hit.setTimeStamp(std::min(hit_time_stamp, hit.getTimeStamp()));
-
-      // sum deposited energy
-      auto charge = hit.getCharge();
-      hit.setCharge(charge + (std::int32_t)std::llround(sim_hit.getEDep() * 1e6));
+      cell.earliestTimeStamp = std::min(cell.earliestTimeStamp, hit_time_stamp);
     }
   }
 
-  for (auto item : cell_hit_map) {
-    raw_hits->push_back(item.second);
+  for (const auto& [cell_id, cell] : cell_hit_map) {
+    if (cell.energyDeposit < m_cfg.threshold) {
+      debug("Cell {} summed edep {:.2f} is below threshold of {:.2f} [keV]", cell_id,
+            cell.energyDeposit, m_cfg.threshold / dd4hep::keV);
+      continue;
+    }
+
+    edm4eic::MutableRawTrackerHit raw_hit_value{
+        cell_id, (std::int32_t)std::llround(cell.energyDeposit * 1e6), cell.earliestTimeStamp};
+    raw_hits->push_back(raw_hit_value);
     auto raw_hit = raw_hits->at(raw_hits->size() - 1);
 
     for (const auto& sim_hit : *sim_hits) {
-      if (item.first == sim_hit.getCellID()) {
-        // create link
-        auto link = links->create();
-        link.setFrom(item.second);
-        link.setTo(sim_hit);
-        link.setWeight(1.0);
-        // set association
-        auto hitassoc = associations->create();
-        hitassoc.setWeight(1.0);
-        hitassoc.setRawHit(raw_hit);
-        hitassoc.setSimHit(sim_hit);
+      if (cell_id != sim_hit.getCellID()) {
+        continue;
       }
+
+      // Energy-fraction weights make truth relations describe the signal that
+      // actually contributed to the emitted channel hit. A zero-energy channel
+      // can only pass when the threshold is zero; retain its relations with
+      // zero weight rather than divide by zero.
+      const double weight =
+          cell.energyDeposit > 0.0 ? sim_hit.getEDep() / cell.energyDeposit : 0.0;
+
+      auto link = links->create();
+      link.setFrom(raw_hit);
+      link.setTo(sim_hit);
+      link.setWeight(weight);
+
+      auto hitassoc = associations->create();
+      hitassoc.setWeight(weight);
+      hitassoc.setRawHit(raw_hit);
+      hitassoc.setSimHit(sim_hit);
     }
   }
 }
