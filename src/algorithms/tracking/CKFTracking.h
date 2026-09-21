@@ -3,12 +3,14 @@
 
 #pragma once
 
+#include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/VectorMultiTrajectory.hpp>
 #include <Acts/EventData/VectorTrackContainer.hpp>
 #include <Acts/Geometry/TrackingGeometry.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <Acts/TrackFinding/CombinatorialKalmanFilter.hpp>
 #include <Acts/TrackFinding/MeasurementSelector.hpp>
+#include <Acts/TrackFitting/KalmanFitter.hpp>
 #include <Acts/Utilities/Logger.hpp>
 #include <Acts/Utilities/Result.hpp>
 #include <ActsExamples/EventData/Track.hpp>
@@ -21,6 +23,7 @@
 #include <string_view>
 #include <vector>
 
+#include "B0TrackStationSelector.h"
 #include "CKFTrackingConfig.h"
 #include "algorithms/interfaces/ActsSvc.h"
 #include "algorithms/interfaces/WithPodConfig.h"
@@ -64,11 +67,31 @@ public:
                           std::shared_ptr<const Acts::MagneticFieldProvider> magneticField,
                           const Acts::Logger& logger);
 
+  using TrackFitterOptions = Acts::KalmanFitterOptions<Acts::VectorMultiTrajectory>;
+  using TrackFitterResult  = Acts::Result<ActsExamples::TrackContainer::TrackProxy>;
+  class TrackFitterFunction {
+  public:
+    virtual ~TrackFitterFunction()                                            = default;
+    virtual TrackFitterResult operator()(const std::vector<Acts::SourceLink>&,
+                                         const ActsExamples::TrackParameters&,
+                                         const TrackFitterOptions&,
+                                         ActsExamples::TrackContainer&) const = 0;
+  };
+  static std::shared_ptr<TrackFitterFunction>
+  makeTrackFitterFunction(std::shared_ptr<const Acts::TrackingGeometry> trackingGeometry,
+                          std::shared_ptr<const Acts::MagneticFieldProvider> magneticField,
+                          const Acts::Logger& logger);
+
   CKFTracking(std::string_view name)
       : CKFTrackingAlgorithm{name,
                              {"inputTrackParameters", "inputMeasurements"},
                              {"outputActsTrackStates", "outputActsTracks"},
                              "Combinatorial Kalman Filter track finding"} {}
+
+  /// Validate the configured absolute PDG; the seed q/p determines the charge sign.
+  static Acts::ParticleHypothesis makeParticleHypothesis(int absolutePdg);
+
+  static void validateRefitCovarianceScale(double scale);
 
   void init() final;
   void process(const Input&, const Output&) const final;
@@ -76,11 +99,14 @@ public:
 private:
   std::shared_ptr<const Acts::Logger> m_acts_logger{nullptr};
   std::shared_ptr<CKFTrackingFunction> m_trackFinderFunc;
+  std::shared_ptr<TrackFitterFunction> m_trackFitterFunc;
   std::shared_ptr<const ActsGeometryProvider> m_geoSvc{
       algorithms::ActsSvc::instance().acts_geometry_provider()};
   std::shared_ptr<const Acts::MagneticFieldProvider> m_BField{m_geoSvc->getFieldProvider()};
 
+  Acts::ParticleHypothesis m_particleHypothesis = Acts::ParticleHypothesis::pion();
   Acts::MeasurementSelector::Config m_sourcelinkSelectorCfg;
+  B0SurfaceStationMap m_b0SurfaceStations;
 
   /// Private access to the logging instance
   const Acts::Logger& acts_logger() const { return *m_acts_logger; }

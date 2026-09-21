@@ -5,6 +5,7 @@
 #include <Acts/Geometry/DetectorElementBase.hpp>
 #endif
 #include <Acts/Geometry/GeometryIdentifier.hpp>
+#include <Acts/Geometry/Layer.hpp>
 #include <Acts/Geometry/TrackingGeometry.hpp>
 #include <Acts/Geometry/TrackingVolume.hpp>
 #include <Acts/MagneticField/MagneticFieldContext.hpp>
@@ -22,10 +23,13 @@
 #include <Acts/Visualization/PlyVisualization3D.hpp>
 #include <ActsPlugins/DD4hep/ConvertDD4hepDetector.hpp>
 #include <ActsPlugins/DD4hep/DD4hepDetectorElement.hpp>
+#include <ActsPlugins/DD4hep/DD4hepConversionHelpers.hpp>
 #include <ActsPlugins/DD4hep/DD4hepFieldAdapter.hpp>
 #include <ActsPlugins/Json/JsonMaterialDecorator.hpp>
 #include <ActsPlugins/Json/MaterialMapJsonConverter.hpp>
 #include <DD4hep/DetElement.h>
+#include <DD4hep/Alignments.h>
+#include <DD4hep/DetectorTools.h>
 #include <DD4hep/VolumeManager.h>
 #include <TGeoManager.h>
 #include <boost/container/detail/std_fwd.hpp>
@@ -38,23 +42,20 @@
 #include <functional>
 #include <initializer_list>
 #include <set>
+#include <sstream>
 #include <type_traits>
 #include <utility>
 
 #include "ActsGeometryProvider.h"
+#include "B0MaterialValidation.h"
 #include "extensions/spdlog/SpdlogToActs.h"
 
 template <typename T>
 struct fmt::formatter<T, std::enable_if_t<std::is_base_of_v<Eigen::MatrixBase<T>, T>, char>>
     : fmt::ostream_formatter {};
 
-/// @brief Material decorator wrapper that tracks per-layer material assignment
-///
-/// Wraps Acts::JsonMaterialDecorator and, for each decorate() call, records
-/// whether material was assigned to any approach surface in each
-/// (volume, layer) pair. After geometry conversion, call check() to emit
-/// critical log messages for every layer that was visited but never had
-/// material assigned to any of its approach surfaces.
+/// Preserve geometry-declared mapping targets before JSON decoration, including
+/// passive representing surfaces. Also report layers without approach material.
 class EpicJsonMaterialDecorator : public Acts::IMaterialDecorator {
 public:
   /// Key identifying a layer: (volume id, layer id)
@@ -66,6 +67,14 @@ public:
       : m_inner(rConfig, jFileName, level), m_log(std::move(logger)) {}
 
   void decorate(Acts::Surface& surface) const override {
+    // Preserve the XML mapping targets: missing JSON entries leave prototypes
+    // in place, which are not physical material usable by the fitter.
+    if (eicrecon::isPrototypeMaterial(surface.surfaceMaterial())) {
+      m_expectedMaterial.insert(surface.geometryId());
+      // Navigation-layer representing surfaces receive their final identifier
+      // after this callback. Preserve identity by pointer until closure ends.
+      m_expectedSurfaces.push_back(&surface);
+    }
     m_inner.decorate(surface);
     const auto id = surface.geometryId();
     m_log->trace("{} assigned to surface with geometryId=(volume={}, boundary={}, layer={}, "
@@ -87,6 +96,42 @@ public:
 
   void decorate(Acts::TrackingVolume& volume) const override { m_inner.decorate(volume); }
 
+  const std::set<Acts::GeometryIdentifier>& expectedMaterial() const { return m_expectedMaterial; }
+
+  void validateB0Volumes(const std::set<Acts::GeometryIdentifier::Value>& volumes) const {
+    eicrecon::validateB0MaterialTargets(eicrecon::b0MaterialTargetsAfterClosure(m_expectedSurfaces),
+                                        volumes);
+  }
+
+  void validateExternalPassiveLayers(const dd4hep::DetElement& detector,
+                                     const std::set<Acts::GeometryIdentifier::Value>& volumes,
+                                     const Acts::GeometryContext& gctx) const {
+    std::istringstream references(
+        ActsPlugins::getParamOr<std::string>("passive_layer_references", detector, ""));
+    std::string path;
+    while (references >> path) {
+      const auto element = dd4hep::detail::tools::findDaughterElement(detector.world(), path);
+      if (!element.isValid() || !ActsPlugins::getParamOr<bool>("passive_disc", element, false)) {
+        throw std::runtime_error("Invalid B0Tracker external passive disc: " + path);
+      }
+      const auto& parameters     = ActsPlugins::getParams(element);
+      const auto& world          = element.nominal().worldTransformation();
+      const auto* rotation       = world.GetRotationMatrix();
+      const auto* translation    = world.GetTranslation();
+      Acts::Transform3 transform = Acts::Transform3::Identity();
+      for (int i = 0; i < 3; ++i) {
+        transform.translation()[i] = translation[i] * Acts::UnitConstants::cm;
+        for (int j = 0; j < 3; ++j) {
+          transform.linear()(i, j) = rotation[3 * i + j];
+        }
+      }
+      eicrecon::validateB0PassiveDiscRepresentation(
+          eicrecon::b0MaterialTargetsAfterClosure(m_expectedSurfaces), volumes, gctx, transform,
+          parameters.get<double>("passive_disc_r_min"),
+          parameters.get<double>("passive_disc_r_max"), path);
+    }
+  }
+
   /// Report every decorated layer that never received material on any approach surface.
   void check() const {
     for (const auto& key : m_decoratedLayers) {
@@ -99,6 +144,8 @@ public:
   }
 
 private:
+  mutable std::set<Acts::GeometryIdentifier> m_expectedMaterial;
+  mutable std::vector<const Acts::Surface*> m_expectedSurfaces;
   Acts::JsonMaterialDecorator m_inner;
   std::shared_ptr<spdlog::logger> m_log;
   /// All (volume, layer) pairs seen during decoration
@@ -165,8 +212,8 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
   Acts::BinningType bTypePhi   = Acts::equidistant;
   Acts::BinningType bTypeR     = Acts::equidistant;
   Acts::BinningType bTypeZ     = Acts::equidistant;
-  double layerEnvelopeR        = Acts::UnitConstants::mm;
-  double layerEnvelopeZ        = Acts::UnitConstants::mm;
+  double layerEnvelopeR        = m_layerEnvelopeR * Acts::UnitConstants::mm;
+  double layerEnvelopeZ        = m_layerEnvelopeZ * Acts::UnitConstants::mm;
   double defaultLayerThickness = Acts::UnitConstants::fm;
 
   try {
@@ -209,7 +256,9 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
     }
 
     m_init_log->debug("visiting all the surfaces  ");
-    m_trackingGeo->visitSurfaces([this](const Acts::Surface* surface) {
+    const auto epicDeco = std::dynamic_pointer_cast<const EpicJsonMaterialDecorator>(materialDeco);
+    std::set<Acts::GeometryIdentifier> checkedB0Layers;
+    m_trackingGeo->visitSurfaces([this, &epicDeco, &checkedB0Layers](const Acts::Surface* surface) {
       // for now we just require a valid surface
       if (surface == nullptr) {
         m_init_log->info("no surface??? ");
@@ -228,6 +277,26 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
         return;
       }
 
+      // Only validate reconstruction with a supplied map. Geometry construction
+      // without a decorator is also used to generate new material maps.
+      if (epicDeco) {
+        for (auto source = det_element->sourceElement(); source.isValid();
+             source      = source.parent()) {
+          if (std::string(source.name()) != "B0Tracker") {
+            continue;
+          }
+          const auto* layer = surface->associatedLayer();
+          if (layer == nullptr || layer->approachDescriptor() == nullptr) {
+            throw std::runtime_error("B0Tracker sensitive surface has no material approach layer");
+          }
+          if (checkedB0Layers.insert(layer->geometryId()).second) {
+            eicrecon::validateB0ApproachMaterial(*layer->approachDescriptor(),
+                                                 epicDeco->expectedMaterial());
+          }
+          break;
+        }
+      }
+
       // more verbose output is lower enum value
       m_init_log->debug(" det_element->identifier() = {} ", det_element->identifier());
       auto volman   = m_dd4hepDetector->volumeManager();
@@ -242,6 +311,19 @@ void ActsGeometryProvider::initialize(const dd4hep::Detector* dd4hep_geo, std::s
 
       this->m_surfaces.insert_or_assign(vol_id, surface);
     });
+    if (epicDeco) {
+      // Passive layers have no sensitive surface to visit above. Validate every
+      // XML-declared mapping target in the discovered B0 tracking volumes too.
+      std::set<Acts::GeometryIdentifier::Value> b0Volumes;
+      for (const auto& layer : checkedB0Layers) {
+        b0Volumes.insert(layer.volume());
+      }
+      if (!b0Volumes.empty()) {
+        epicDeco->validateExternalPassiveLayers(m_dd4hepDetector->detector("B0Tracker"), b0Volumes,
+                                                m_trackingGeoCtx);
+      }
+      epicDeco->validateB0Volumes(b0Volumes);
+    }
   } else {
     m_init_log->error("m_trackingGeo==null why am I still alive???");
   }

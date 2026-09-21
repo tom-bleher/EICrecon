@@ -1,0 +1,859 @@
+{
+  "provenance": {
+    "date": "2026-09-08",
+    "source_base": "e2d0391a97b42c46a546f19a2cf19d63e214da1a",
+    "source_changes": "B0 hardening commits accompanying this record; refit default remains disabled",
+    "environment": {
+      "container": {
+        "path": "/home/tomble/eic/local/lib/eic_xl-26.04.0-stable.sif",
+        "size_bytes": 4247715840,
+        "sha256": "2918b59bda8cc83ed57d449116d257ce47caa851f96341d599522e2e0c9d3a36"
+      },
+      "acts_version": "47.7.0",
+      "dd4hep_version": "1.35",
+      "dd4hep_version_evidence": "/opt/local/cmake/DD4hepConfigVersion.cmake",
+      "geant4_version": "11.3.2",
+      "geant4_version_evidence": "geant4-config --version",
+      "npsim": {
+        "version": "1.4.6",
+        "resolved_path": "/opt/software/linux-x86_64_v2/npsim-1.4.6-zgyp4zmnimuppl2z3wmuf5vs3wha67cx/bin/npsim",
+        "sha256": "45d5cdec0f5c3159184d197a6af684ccce695bc644101d82cd7705ec75896e18"
+      },
+      "launch_script_sha256": {
+        "/home/tomble/eic/eic-shell-acts47": "fd0874a87d10f0204261d561d21924111b47ffe31f273222e022affc94e04ce1",
+        "/home/tomble/eic/acts-47.7.0/enter.sh": "1ef25aeafc04a23c734e66adc720ce90fd14637a19dc6d80f1d6c76a5003836b",
+        "/home/tomble/eic/acts-47.7.0/setup.sh": "cd64ac37534ac4a9b3ad5d6146796d3d58e527d689ed57735843ac6aabd911f0"
+      },
+      "recorded": "2026-09-07 during running full simulation; immutable container contents read directly",
+      "simulation_campaign": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956"
+    },
+    "geometry": {
+      "reconstruction_commit": "6232389ed30aa6014cc57a19aa336bf33a0a0767",
+      "reconstruction_install": "/home/tomble/eic/dev/epic/install",
+      "simulation_snapshot": "/nas/nas1/tomble/presentation17/detectors/devepic-5x41",
+      "simulation_source_commit": "2f84eca68d5d2cf854039ab3dae3745ae65c7e16",
+      "config": "epic_ip6_extended_5x41",
+      "field_config": "beamline_5x41.xml",
+      "comparison": "221 XML/GDML/STL files compared: only material-map references in entry XML and compact/version.xml differ"
+    },
+    "material_map": {
+      "path": "/nas/nas1/tomble/presentation17/maps/devepic-cbc0605e892b/material-map.cbor",
+      "sha256": "cbc0605e892b7777db3c818a51e56c51ddb19e3f7c91e813c110aeab1e1e691c"
+    },
+    "beams_GeV": [
+      5,
+      41
+    ],
+    "crossing_angle_rad": -0.025,
+    "simulation_manifest": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/simulation.json",
+    "simulation_manifest_sha256": "078ddb7b8e69058980aa66765c50d2bf113bcc871ae6beccbc2d23178ddde1d0",
+    "tracker_action": {
+      "action": "Geant4TrackerWeightedPlacementAction",
+      "source": "/nas/nas1/tomble/presentation17/fixes_20260907/sensitive_action/install-werror/lib/libepicDDG4.so",
+      "path": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/simulation_plugin/libepicDDG4.so",
+      "sha256": "18e2fbadd1643b450a939ea29f4042e68c3bfeb313ab79d9703a033f22d0d742",
+      "components_sha256": "d49b445b14210e8f37e476f0fc674ba5275908385201edcc747c78a7f835b2e6",
+      "parameters": {
+        "HitPositionCombination": 2,
+        "CollectSingleDeposits": false
+      },
+      "detector": "B0Tracker"
+    },
+    "parameters": {
+      "threshold_keV": 0.54,
+      "CKFChi2CutOff": 50,
+      "ParticleHypothesisPdg": 2212,
+      "refit_scales": [
+        0,
+        100,
+        1000,
+        10000
+      ],
+      "truth_refit_scale": 0,
+      "threads": 8,
+      "maxCombinations": 512,
+      "maxSeeds": 20,
+      "beamSpot_mm": {
+        "dvcs": [
+          0.17,
+          0.02,
+          37
+        ],
+        "guns": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "samples": {
+      "dvcs": {
+        "sim_input": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/devepic/dvcs/chunks/0000/sim.edm4hep.root",
+        "sha256": "96abd18ab3a1abda5f7a53ee96ff1ca552767014adc7d198240f56b529eab5ca",
+        "events": 1000,
+        "start_entry": 0,
+        "generator": {
+          "path": "/home/tomble/eic/afterburn/DVCS.1.ab.hiAcc.5x41.hepmc3",
+          "sha256": "bb242a1e5428081e0ba750444a0d41645ac70b44061c592843ea48a1b2d66107",
+          "available_events": 961838
+        },
+        "simulation_chunk": {
+          "path": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/devepic/dvcs/chunks/0000/sim.edm4hep.root",
+          "input": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/generator_chunks/dvcs/0000.hepmc3",
+          "input_start": 0,
+          "events": 2000,
+          "seed": 170000
+        }
+      },
+      "p15": {
+        "sim_input": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/devepic/p15/chunks/0000/sim.edm4hep.root",
+        "sha256": "64e56764eaae8ce3f745289f209aa61f48bb4c560a777292ab40e16ef122f3d9",
+        "events": 1000,
+        "start_entry": 0,
+        "generator": {
+          "path": "/home/tomble/eic/dev/inputs/pcurve/proton_gun_p15_theta4to22mrad_30k.hepmc3",
+          "sha256": "844d6bfab03d396aa1759fb1e58d0397dd0b14c0c362287e2e2fe90bfe33bf48",
+          "available_events": 30000
+        },
+        "simulation_chunk": {
+          "path": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/devepic/p15/chunks/0000/sim.edm4hep.root",
+          "input": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/generator_chunks/p15/0000.hepmc3",
+          "input_start": 0,
+          "events": 2000,
+          "seed": 171000
+        }
+      },
+      "p41": {
+        "sim_input": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/devepic/p41/chunks/0000/sim.edm4hep.root",
+        "sha256": "3c6bfe24d038b132f0173de0b77db200263cd85c69b44ee5985c6af412bdc8c0",
+        "events": 1000,
+        "start_entry": 0,
+        "generator": {
+          "path": "/home/tomble/eic/dev/inputs/pcurve/proton_gun_p41_theta4to22mrad_30k.hepmc3",
+          "sha256": "260941154be0de793b7f3d9520844968130e413ff4f4133e136216ca2c5317e7",
+          "available_events": 30000
+        },
+        "simulation_chunk": {
+          "path": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/devepic/p41/chunks/0000/sim.edm4hep.root",
+          "input": "/nas/nas1/tomble/presentation17/simulation_outputs/campaign_5x41_20260907_021956/generator_chunks/p41/0000.hepmc3",
+          "input_start": 0,
+          "events": 2000,
+          "seed": 177000
+        }
+      }
+    }
+  },
+  "covariance_study": {
+    "dvcs": {
+      "0": {
+        "eligible": 472,
+        "matched": 458,
+        "joint95_coverage": 0.7117903930131004,
+        "coverage_valid": 458,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -3.0745623688183583,
+          "median": -0.011148593038917055,
+          "p84": 2.8588837103246423
+        },
+        "tracks": 460,
+        "direct_primary_unmatched_tracks": 0,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 460
+        },
+        "paired_equal_assigned_hits": 460
+      },
+      "100": {
+        "eligible": 472,
+        "matched": 458,
+        "joint95_coverage": 0.7445414847161572,
+        "coverage_valid": 458,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -3.7481050820815427,
+          "median": 0.05267645208966089,
+          "p84": 3.1560405716635644
+        },
+        "tracks": 460,
+        "direct_primary_unmatched_tracks": 0,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 460
+        },
+        "paired_equal_assigned_hits": 459
+      },
+      "1000": {
+        "eligible": 472,
+        "matched": 458,
+        "joint95_coverage": 0.7336244541484717,
+        "coverage_valid": 458,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -3.63132657897935,
+          "median": 0.05530715494444233,
+          "p84": 3.1021983228695262
+        },
+        "tracks": 460,
+        "direct_primary_unmatched_tracks": 0,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 460
+        },
+        "paired_equal_assigned_hits": 458
+      },
+      "10000": {
+        "eligible": 472,
+        "matched": 458,
+        "joint95_coverage": 0.7358078602620087,
+        "coverage_valid": 458,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -3.749814119839878,
+          "median": 0.016208381085728855,
+          "p84": 3.0182972256475193
+        },
+        "tracks": 460,
+        "direct_primary_unmatched_tracks": 0,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 460
+        },
+        "paired_equal_assigned_hits": 457
+      }
+    },
+    "p15": {
+      "0": {
+        "eligible": 438,
+        "matched": 423,
+        "joint95_coverage": 0.6312056737588653,
+        "coverage_valid": 423,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -1.9361353069643528,
+          "median": 0.12832655263323456,
+          "p84": 1.9508339463793674
+        },
+        "tracks": 427,
+        "direct_primary_unmatched_tracks": 1,
+        "duplicate_tracks": 1,
+        "covariance_status": {
+          "positive_definite": 427
+        },
+        "paired_equal_assigned_hits": 425
+      },
+      "100": {
+        "eligible": 438,
+        "matched": 422,
+        "joint95_coverage": 0.6516587677725119,
+        "coverage_valid": 422,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -2.1844247237109076,
+          "median": -0.01215974291123427,
+          "p84": 1.8478675162223381
+        },
+        "tracks": 426,
+        "direct_primary_unmatched_tracks": 1,
+        "duplicate_tracks": 1,
+        "covariance_status": {
+          "positive_definite": 426
+        },
+        "paired_equal_assigned_hits": 423
+      },
+      "1000": {
+        "eligible": 438,
+        "matched": 422,
+        "joint95_coverage": 0.6516587677725119,
+        "coverage_valid": 422,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -2.3752473115086836,
+          "median": -0.17493629154882126,
+          "p84": 1.8798443765466137
+        },
+        "tracks": 426,
+        "direct_primary_unmatched_tracks": 1,
+        "duplicate_tracks": 1,
+        "covariance_status": {
+          "positive_definite": 426
+        },
+        "paired_equal_assigned_hits": 421
+      },
+      "10000": {
+        "eligible": 438,
+        "matched": 421,
+        "joint95_coverage": 0.6460807600950119,
+        "coverage_valid": 421,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -2.6299275606915895,
+          "median": -0.3091193998943501,
+          "p84": 1.7773933726355846
+        },
+        "tracks": 425,
+        "direct_primary_unmatched_tracks": 1,
+        "duplicate_tracks": 1,
+        "covariance_status": {
+          "positive_definite": 425
+        },
+        "paired_equal_assigned_hits": 420
+      }
+    },
+    "p41": {
+      "0": {
+        "eligible": 443,
+        "matched": 433,
+        "joint95_coverage": 0.6997690531177829,
+        "coverage_valid": 433,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -2.8383603255760286,
+          "median": -0.033445476075995156,
+          "p84": 2.969106345440432
+        },
+        "tracks": 438,
+        "direct_primary_unmatched_tracks": 2,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 438
+        },
+        "paired_equal_assigned_hits": 436
+      },
+      "100": {
+        "eligible": 443,
+        "matched": 433,
+        "joint95_coverage": 0.7297921478060047,
+        "coverage_valid": 433,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -2.586562228161125,
+          "median": -0.13458020178904273,
+          "p84": 3.0602343642929517
+        },
+        "tracks": 438,
+        "direct_primary_unmatched_tracks": 2,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 438
+        },
+        "paired_equal_assigned_hits": 433
+      },
+      "1000": {
+        "eligible": 443,
+        "matched": 433,
+        "joint95_coverage": 0.7182448036951501,
+        "coverage_valid": 433,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -3.0743177576606935,
+          "median": -0.19813402631764432,
+          "p84": 3.2385553292931477
+        },
+        "tracks": 437,
+        "direct_primary_unmatched_tracks": 1,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 437
+        },
+        "paired_equal_assigned_hits": 434
+      },
+      "10000": {
+        "eligible": 443,
+        "matched": 433,
+        "joint95_coverage": 0.6928406466512702,
+        "coverage_valid": 433,
+        "coverage_invalid": 0,
+        "qop_residual_percent": {
+          "p16": -3.6272500825765497,
+          "median": -0.19929483899528944,
+          "p84": 3.319727046530937
+        },
+        "tracks": 438,
+        "direct_primary_unmatched_tracks": 2,
+        "duplicate_tracks": 0,
+        "covariance_status": {
+          "positive_definite": 438
+        },
+        "paired_equal_assigned_hits": 434
+      }
+    }
+  },
+  "synthetic_inputs": {
+    "endpoint8": {
+      "events": 100,
+      "random_seed": 170008,
+      "generator_sha256": "ff4a67ca91664e3ea9323c81817eb06beef0812f337701cca051949e79f39694",
+      "sim_sha256": "81a3f6fcd6a809cf8d7f14baad9d7a092d64c66d820a1bccca597089df6926e2",
+      "steering": "from DDSim.DD4hepSimulation import DD4hepSimulation\nSIM = DD4hepSimulation()\nSIM.compactFile = '/home/tomble/eic/dev/epic/install/share/epic/epic_ip6_extended_5x41.xml'\nSIM.inputFiles = ['gun.hepmc3']\nSIM.outputFile = 'sim.edm4hep.root'\nSIM.numberOfEvents = 100\nSIM.random.seed = 170008\nSIM.action.mapActions['B0Tracker'] = ('Geant4TrackerWeightedPlacementAction', {'HitPositionCombination': 2, 'CollectSingleDeposits': False})\n"
+    },
+    "endpoint15": {
+      "events": 100,
+      "random_seed": 170008,
+      "generator_sha256": "c91686125d2dba7a2a88000ff317c57a0fcd00753fd37e4aacc0ebbffa709bc2",
+      "sim_sha256": "6c63ac87e38c49869dded0696c7abd8aa660c5ec4b044cec57217d93497675c9",
+      "steering": "from DDSim.DD4hepSimulation import DD4hepSimulation\nSIM = DD4hepSimulation()\nSIM.compactFile = '/home/tomble/eic/dev/epic/install/share/epic/epic_ip6_extended_5x41.xml'\nSIM.inputFiles = ['gun.hepmc3']\nSIM.outputFile = 'sim.edm4hep.root'\nSIM.numberOfEvents = 100\nSIM.random.seed = 170008\nSIM.action.mapActions['B0Tracker'] = ('Geant4TrackerWeightedPlacementAction', {'HitPositionCombination': 2, 'CollectSingleDeposits': False})\n"
+    },
+    "occupancy8": {
+      "events": 100,
+      "random_seed": 170008,
+      "generator_sha256": "c524fcea4ef54a538a5e1eebde68e8ae57053f6e61f7f9cec6a6994f12669d85",
+      "sim_sha256": "5ded48662530586b4808b712447498f5ed047bf3568bf29d2be6991eb308e758",
+      "steering": "from DDSim.DD4hepSimulation import DD4hepSimulation\nSIM = DD4hepSimulation()\nSIM.compactFile = '/home/tomble/eic/dev/epic/install/share/epic/epic_ip6_extended_5x41.xml'\nSIM.inputFiles = ['gun.hepmc3']\nSIM.outputFile = 'sim.edm4hep.root'\nSIM.numberOfEvents = 100\nSIM.random.seed = 170008\nSIM.action.mapActions['B0Tracker'] = ('Geant4TrackerWeightedPlacementAction', {'HitPositionCombination': 2, 'CollectSingleDeposits': False})\n"
+    }
+  },
+  "endpoint_occupancy": {
+    "endpoint8_baseline_fixed": {
+      "eligible": 91,
+      "matched": 2,
+      "efficiency": 0.02197802197802198,
+      "tracks": 2,
+      "direct_primary_unmatched_tracks": 0,
+      "direct_primary_fake_fraction": 0.0,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.0,
+      "qop_residual_percent": {
+        "p16": -1.3264715671539307,
+        "median": -0.646713376045227,
+        "p84": 0.03304481506347651
+      },
+      "events": 100,
+      "seeds": 5,
+      "seed_hit_count_distribution": {
+        "4": 3,
+        "3": 2
+      },
+      "max_seeds_per_event": 1,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [],
+      "hits": 494,
+      "max_hits_per_event": 16,
+      "budget_message_events": [],
+      "budget_messages": 0,
+      "log_lines": [
+        "3.00 ms ( 25.0%) edm4eic::TrackSeed:B0TrackerSeeds",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.39"
+      ]
+    },
+    "endpoint8_current": {
+      "eligible": 91,
+      "matched": 89,
+      "efficiency": 0.978021978021978,
+      "tracks": 90,
+      "direct_primary_unmatched_tracks": 0,
+      "direct_primary_fake_fraction": 0.0,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.7191011235955056,
+      "qop_residual_percent": {
+        "p16": -1.9460759162902832,
+        "median": 0.23102760314941406,
+        "p84": 1.562232494354248
+      },
+      "events": 100,
+      "seeds": 124,
+      "seed_hit_count_distribution": {
+        "4": 89,
+        "3": 35
+      },
+      "max_seeds_per_event": 7,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [],
+      "hits": 494,
+      "max_hits_per_event": 16,
+      "budget_message_events": [],
+      "budget_messages": 0,
+      "log_lines": [
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.52"
+      ]
+    },
+    "endpoint15_baseline_fixed": {
+      "eligible": 77,
+      "matched": 0,
+      "efficiency": 0.0,
+      "tracks": 0,
+      "direct_primary_unmatched_tracks": 0,
+      "direct_primary_fake_fraction": null,
+      "duplicate_tracks": 0,
+      "joint95_coverage": null,
+      "qop_residual_percent": null,
+      "events": 100,
+      "seeds": 0,
+      "seed_hit_count_distribution": {},
+      "max_seeds_per_event": 0,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [],
+      "hits": 340,
+      "max_hits_per_event": 13,
+      "budget_message_events": [],
+      "budget_messages": 0,
+      "log_lines": [
+        "3.00 ms (  9.7%) edm4eic::TrackSeed:B0TrackerSeeds",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.40"
+      ]
+    },
+    "endpoint15_current": {
+      "eligible": 77,
+      "matched": 74,
+      "efficiency": 0.961038961038961,
+      "tracks": 75,
+      "direct_primary_unmatched_tracks": 0,
+      "direct_primary_fake_fraction": 0.0,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.7567567567567568,
+      "qop_residual_percent": {
+        "p16": -2.020535022020318,
+        "median": 0.055845454335234926,
+        "p84": 1.329135894775413
+      },
+      "events": 100,
+      "seeds": 88,
+      "seed_hit_count_distribution": {
+        "3": 74,
+        "4": 14
+      },
+      "max_seeds_per_event": 3,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [],
+      "hits": 340,
+      "max_hits_per_event": 13,
+      "budget_message_events": [],
+      "budget_messages": 0,
+      "log_lines": [
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.54"
+      ]
+    },
+    "occupancy8_baseline": {
+      "eligible": 336,
+      "matched": 304,
+      "efficiency": 0.9047619047619048,
+      "tracks": 305,
+      "direct_primary_unmatched_tracks": 0,
+      "direct_primary_fake_fraction": 0.0,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.6907894736842105,
+      "qop_residual_percent": {
+        "p16": -2.2413606765950935,
+        "median": 0.008946977907883059,
+        "p84": 1.9973527428399653
+      },
+      "events": 100,
+      "seeds": 476,
+      "seed_hit_count_distribution": {
+        "4": 267,
+        "3": 209
+      },
+      "max_seeds_per_event": 20,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [
+        67
+      ],
+      "hits": 2803,
+      "max_hits_per_event": 71,
+      "budget_message_events": [
+        15
+      ],
+      "budget_messages": 1,
+      "log_lines": [
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.94"
+      ]
+    },
+    "occupancy8_default": {
+      "eligible": 336,
+      "matched": 325,
+      "efficiency": 0.9672619047619048,
+      "tracks": 327,
+      "direct_primary_unmatched_tracks": 1,
+      "direct_primary_fake_fraction": 0.0030581039755351682,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.6738461538461539,
+      "qop_residual_percent": {
+        "p16": -2.271958528543345,
+        "median": 0.03045823268682989,
+        "p84": 2.05943339331751
+      },
+      "events": 100,
+      "seeds": 467,
+      "seed_hit_count_distribution": {
+        "4": 323,
+        "3": 144
+      },
+      "max_seeds_per_event": 20,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [
+        67,
+        85
+      ],
+      "hits": 2803,
+      "max_hits_per_event": 71,
+      "budget_message_events": [
+        1,
+        8,
+        12,
+        13,
+        15,
+        16,
+        21,
+        26,
+        31,
+        36,
+        41,
+        45,
+        47,
+        48,
+        49,
+        54,
+        58,
+        65,
+        67,
+        69,
+        72,
+        85,
+        99
+      ],
+      "budget_messages": 23,
+      "log_lines": [
+        "14.00 ms (  9.6%) edm4eic::TrackSeed:B0TrackerSeeds",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.90"
+      ]
+    },
+    "occupancy8_loose": {
+      "eligible": 336,
+      "matched": 325,
+      "efficiency": 0.9672619047619048,
+      "tracks": 327,
+      "direct_primary_unmatched_tracks": 1,
+      "direct_primary_fake_fraction": 0.0030581039755351682,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.6738461538461539,
+      "qop_residual_percent": {
+        "p16": -2.271958528543345,
+        "median": 0.034754995815261557,
+        "p84": 2.05943339331751
+      },
+      "events": 100,
+      "seeds": 458,
+      "seed_hit_count_distribution": {
+        "4": 328,
+        "3": 130
+      },
+      "max_seeds_per_event": 24,
+      "configured_max_seeds": 100,
+      "events_at_seed_cap": [],
+      "hits": 2803,
+      "max_hits_per_event": 71,
+      "budget_message_events": [],
+      "budget_messages": 0,
+      "log_lines": [
+        "20.00 ms ( 13.3%) edm4eic::TrackSeed:B0TrackerSeeds",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.92"
+      ]
+    },
+    "occupancy8_tighter": {
+      "eligible": 336,
+      "matched": 314,
+      "efficiency": 0.9345238095238095,
+      "tracks": 315,
+      "direct_primary_unmatched_tracks": 0,
+      "direct_primary_fake_fraction": 0.0,
+      "duplicate_tracks": 0,
+      "joint95_coverage": 0.697452229299363,
+      "qop_residual_percent": {
+        "p16": -2.198724192346395,
+        "median": 0.04168980406100328,
+        "p84": 2.053515761892317
+      },
+      "events": 100,
+      "seeds": 467,
+      "seed_hit_count_distribution": {
+        "4": 323,
+        "3": 144
+      },
+      "max_seeds_per_event": 20,
+      "configured_max_seeds": 20,
+      "events_at_seed_cap": [
+        67,
+        85
+      ],
+      "hits": 2803,
+      "max_hits_per_event": 71,
+      "budget_message_events": [
+        1,
+        8,
+        12,
+        13,
+        15,
+        16,
+        21,
+        26,
+        31,
+        36,
+        41,
+        45,
+        47,
+        48,
+        49,
+        54,
+        58,
+        65,
+        67,
+        69,
+        72,
+        85,
+        99
+      ],
+      "budget_messages": 23,
+      "log_lines": [
+        "17.00 ms ( 10.6%) edm4eic::TrackSeed:B0TrackerSeeds",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.91"
+      ]
+    },
+    "endpoint15_analysis_paired": {
+      "gains": 75,
+      "losses": 0,
+      "common": 0,
+      "equal_assigned_hits": 0
+    },
+    "endpoint8_analysis_paired": {
+      "gains": 88,
+      "losses": 0,
+      "common": 2,
+      "equal_assigned_hits": 2
+    },
+    "occupancy8_default_analysis_paired": {
+      "gains": 21,
+      "losses": 0,
+      "common": 305,
+      "equal_assigned_hits": 305
+    },
+    "occupancy8_loose_analysis_paired": {
+      "gains": 0,
+      "losses": 0,
+      "common": 326,
+      "equal_assigned_hits": 325
+    },
+    "occupancy8_tighter_analysis_paired": {
+      "gains": 1,
+      "losses": 12,
+      "common": 314,
+      "equal_assigned_hits": 311
+    }
+  },
+  "decision": "Keep RefitSeedCovarianceScale=0 and existing chi2/search budgets. Final covariance calibration and realistic background validation remain unresolved.",
+  "precision": "Full stored double precision. README percentages rounded to two decimal places; q/p widths use half of NumPy linear P84 minus P16.",
+  "unfiltered_dvcs_1000_to_10000": {
+    "baseline_candidates": 543,
+    "variant_candidates": 543,
+    "gain_groups": [],
+    "loss_groups": [],
+    "common_groups": 543,
+    "ambiguous_groups": [],
+    "unique_pairs": 543,
+    "numerical_pairs": 543,
+    "invalid_pairs": 0,
+    "abs_parameter_shift_in_baseline_sigma": {
+      "loc0": {
+        "min": 4.510093237304587e-06,
+        "p16": 0.005945559186669338,
+        "median": 0.040338638770432644,
+        "p84": 0.14881156359382414,
+        "max": 65.64528696167801
+      },
+      "loc1": {
+        "min": 7.271276767929579e-06,
+        "p16": 0.010338712723655517,
+        "median": 0.054236550476811266,
+        "p84": 0.17350601174947208,
+        "max": 47.20560355711911
+      },
+      "phi": {
+        "min": 0.0,
+        "p16": 0.005888096571400894,
+        "median": 0.04036291987466401,
+        "p84": 0.14781581418389278,
+        "max": 96.04425151673892
+      },
+      "theta": {
+        "min": 7.218539507569521e-05,
+        "p16": 0.009707030922999247,
+        "median": 0.054040585435831866,
+        "p84": 0.1738938327586064,
+        "max": 71.02503756405052
+      },
+      "qOverP": {
+        "min": 2.0889116770313406e-05,
+        "p16": 0.017478762612829258,
+        "median": 0.09846662368084844,
+        "p84": 0.27892461442501826,
+        "max": 7.926707685960901
+      }
+    },
+    "sigma_ratio_variant_over_baseline": {
+      "loc0": {
+        "min": 0.12761338548331538,
+        "p16": 0.9977200444457462,
+        "median": 1.0033493817429562,
+        "p84": 1.0138239383581797,
+        "max": 2.3544366812687225
+      },
+      "loc1": {
+        "min": 0.20639432854936793,
+        "p16": 0.999265581605688,
+        "median": 1.0062081161828682,
+        "p84": 1.0207186090910811,
+        "max": 3.0150730012117397
+      },
+      "phi": {
+        "min": 0.5816734049934632,
+        "p16": 0.998002033375024,
+        "median": 1.003389645611947,
+        "p84": 1.0151409775250708,
+        "max": 11.05107589068216
+      },
+      "theta": {
+        "min": 0.9359754813438932,
+        "p16": 1.000162338731588,
+        "median": 1.0066726993846309,
+        "p84": 1.0213085242645996,
+        "max": 12.738989785484756
+      },
+      "qOverP": {
+        "min": 0.8965456645784353,
+        "p16": 1.0048795562045516,
+        "median": 1.022325338806333,
+        "p84": 1.0414991388691937,
+        "max": 3.9521597524431353
+      }
+    }
+  },
+  "checks": {
+    "build_install": "pass; ACTS 47.7.0",
+    "ctest": "2/2 suites pass",
+    "benchmark_python_tests": 24,
+    "exact_comparator_python_tests": 10,
+    "thread_comparison": {
+      "events": 100,
+      "threads": [
+        1,
+        8
+      ],
+      "scales": [
+        0,
+        100
+      ],
+      "fields": 322,
+      "differing_fields": 0
+    },
+    "relations": {
+      "branches": 38,
+      "unexpected_errors": 0
+    },
+    "cartesian_covariance": {
+      "real": 50,
+      "truth_seeded": 46,
+      "finite_nonzero": "all; each scale 0 and 100"
+    },
+    "missing_material_map_exit": 1,
+    "clang_tidy": "six changed translation units; zero unsuppressed diagnostics",
+    "format": "clang-format 23.1.0 changed ranges"
+  }
+}

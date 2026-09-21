@@ -38,13 +38,40 @@ private:
   ParameterRef<std::vector<std::size_t>> m_numMeasurementsCutOff{
       this, "NumMeasurementsCutOff", config().numMeasurementsCutOff,
       "Number of measurements Cut Off for ACTS CKF tracking"};
+  ParameterRef<int> m_particleHypothesisPdg{this, "ParticleHypothesisPdg",
+                                            config().particleHypothesisPdg,
+                                            "Absolute fit-hypothesis PDG: 11, 13, 211 (default), "
+                                            "321, 2212; charge sign from seed q/p, not PID"};
+  ParameterRef<double> m_refitSeedCovarianceScale{
+      this, "RefitSeedCovarianceScale", config().refitSeedCovarianceScale,
+      "Assigned-hit refit seed-covariance scale (0 disables, >=1 enables); finding is unchanged"};
   ParameterRef<std::size_t> m_numMeasurementsMin{
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
 
+  ParameterRef<std::size_t> m_numB0StationsMin{
+      this, "NumB0StationsMin", config().numB0StationsMin,
+      "Minimum distinct B0 stations with fitted measurements (0 disables)"};
+  ParameterRef<double> m_b0StationZGap{this, "B0StationZGap", config().b0StationZGap,
+                                       "Maximum ion-frame z gap within one B0 station [mm]"};
+
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
 public:
+  void PreInit(std::string tag, std::vector<std::string> inputTags,
+               std::vector<std::string> outputTags) {
+    JOmniFactory::PreInit(std::move(tag), std::move(inputTags), std::move(outputTags));
+    // Fail during factory generation: PODIO output can swallow lazy Init exceptions.
+    GetApplication()->SetDefaultParameter(GetPrefix() + ":" + m_particleHypothesisPdg.m_name,
+                                          config().particleHypothesisPdg,
+                                          m_particleHypothesisPdg.m_description);
+    AlgoT::makeParticleHypothesis(config().particleHypothesisPdg);
+    GetApplication()->SetDefaultParameter(GetPrefix() + ":" + m_refitSeedCovarianceScale.m_name,
+                                          config().refitSeedCovarianceScale,
+                                          m_refitSeedCovarianceScale.m_description);
+    AlgoT::validateRefitCovarianceScale(config().refitSeedCovarianceScale);
+  }
+
   void Configure() {
     m_algo = std::make_unique<AlgoT>(this->GetPrefix());
     m_algo->level(static_cast<algorithms::LogLevel>(logger()->level()));
