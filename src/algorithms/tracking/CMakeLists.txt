@@ -26,4 +26,6 @@ plugin_include_directories(${PLUGIN_NAME} PUBLIC
 
 # Add libraries (same as target_include_directories but for both plugin and
 # library)
-plugin_link_libraries(${PLUGIN_NAME} Eigen3::Eigen particle_service_library)
+find_package(nlohmann_json REQUIRED)
+plugin_link_libraries(${PLUGIN_NAME} Eigen3::Eigen particle_service_library
+                      nlohmann_json::nlohmann_json)

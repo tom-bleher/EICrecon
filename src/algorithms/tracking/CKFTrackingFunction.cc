@@ -60,7 +60,7 @@ std::shared_ptr<CKFTracking::CKFTrackingFunction> CKFTracking::makeCKFTrackingFu
   cfg.resolvePassive   = false;
   cfg.resolveMaterial  = true;
   cfg.resolveSensitive = true;
-  Navigator navigator(cfg);
+  Navigator navigator(cfg, logger.cloneWithSuffix("Navigator"));
 
   Propagator propagator(std::move(stepper), std::move(navigator));
   CKF trackFinder(std::move(propagator), logger.cloneWithSuffix("CKF"));
