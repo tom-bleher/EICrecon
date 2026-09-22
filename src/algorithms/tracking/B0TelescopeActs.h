@@ -9,14 +9,18 @@
 #if EICRECON_HAS_B0_TELESCOPE
 #if Acts_VERSION_MAJOR >= 47
 #include <Acts/EventData/SeedContainer.hpp>
+#include <Acts/EventData/SeedProxy.hpp>
 #include <Acts/EventData/SpacePointContainer.hpp>
+#include <Acts/EventData/SpacePointProxy.hpp>
 #include <Acts/Seeding/DoubletSeedFinder.hpp>
 #include <Acts/Seeding/ITripletSeedFilter.hpp>
 #include <Acts/Seeding/TripletSeedFinder.hpp>
 #include <Acts/Seeding/TripletSeeder.hpp>
 #else
 #include <Acts/EventData/SeedContainer2.hpp>
+#include <Acts/EventData/SeedProxy2.hpp>
 #include <Acts/EventData/SpacePointContainer2.hpp>
+#include <Acts/EventData/SpacePointProxy2.hpp>
 #include <Acts/Seeding2/DoubletSeedFinder.hpp>
 #include <Acts/Seeding2/ITripletSeedFilter.hpp>
 #include <Acts/Seeding2/TripletSeedFinder.hpp>
