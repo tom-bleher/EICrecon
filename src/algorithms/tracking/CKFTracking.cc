@@ -355,9 +355,37 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         continue;
       }
 
-      auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+      auto extrapolationResult = [&]() -> Acts::Result<void> {
+        auto initial = Acts::extrapolateTrackToReferenceSurface(
+            track, *pSurface, extrapolator, extrapolationOptions,
+            Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+        if (initial.ok() || m_cfg.numB0StationsMin <= 0) {
+          return initial;
+        }
+        // The tangent-based choice can point downstream for curved B0 tracks.
+        // Retry from the first smoothed measurement toward the upstream reference.
+        auto first = Acts::findFirstMeasurementState(track);
+        if (!first.ok()) {
+          return first.error();
+        }
+        auto parameters           = track.createParametersFromState(*first);
+        auto upstreamOptions      = extrapolationOptions;
+        upstreamOptions.direction = Acts::Direction::Backward();
+        auto propagated =
+            extrapolator.template propagate<Acts::BoundTrackParameters, ExtrapolatorOptions,
+                                            Acts::SurfaceReached>(parameters, *pSurface,
+                                                                  upstreamOptions);
+        if (!propagated.ok()) {
+          return propagated.error();
+        }
+        const auto& end = propagated->endParameters.value();
+        debug("Upstream reference reached: position {} {} {}, path {}", end.position(gctx).x(),
+              end.position(gctx).y(), end.position(gctx).z(), propagated->pathLength);
+        track.setReferenceSurface(pSurface);
+        track.parameters() = end.parameters();
+        track.covariance() = end.covariance().value();
+        return Acts::Result<void>::success();
+      }();
 
       if (!extrapolationResult.ok()) {
         debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
