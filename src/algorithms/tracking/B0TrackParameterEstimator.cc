@@ -75,7 +75,7 @@ std::optional<PerigeeEstimate> estimateTrackParameters(
   // Field-only seed transport. Material effects belong to the downstream CKF.
   // In particular, never relabel the local hit tangent as a direction at the IP.
   Acts::Propagator<Acts::EigenStepper<>> propagator{Acts::EigenStepper<>{field}};
-  Acts::PropagatorOptions<> options(gctx, mctx);
+  decltype(propagator)::Options<> options(gctx, mctx);
   options.direction = Acts::Direction::Backward();
   options.pathLimit = cfg.propagationPathLimit * mm;
   const auto propagated = propagator.propagate(initial, *perigee, options);
