@@ -1,0 +1,10 @@
+# May also be configured standalone, without the EIC software stack.
+cmake_minimum_required(VERSION 3.24)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(B0TelescopeMathTests LANGUAGES CXX)
+  enable_testing()
+endif()
+add_executable(b0_telescope_math_test B0TelescopeMathTests.cc)
+target_compile_features(b0_telescope_math_test PRIVATE cxx_std_20)
+target_include_directories(b0_telescope_math_test PRIVATE ../../algorithms/tracking)
+add_test(NAME t_b0_telescope_math COMMAND b0_telescope_math_test)

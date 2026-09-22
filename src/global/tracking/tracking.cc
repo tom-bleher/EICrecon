@@ -19,6 +19,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -32,6 +33,7 @@
 #include "factories/tracking/ActsToTracks_factory.h"
 #include "factories/tracking/ActsTrackMerger_factory.h"
 #include "factories/tracking/AmbiguitySolver_factory.h"
+#include "factories/tracking/B0TelescopeSeeding_factory.h"
 #include "factories/tracking/CKFTracking_factory.h"
 #include "factories/tracking/IterativeVertexFinder_factory.h"
 #include "factories/tracking/SecondaryVertexFinder_factory.h"
@@ -374,9 +376,30 @@ void InitPlugin(JApplication* app) {
       },
       app));
 
-  app->Add(new JOmniFactoryGeneratorT<TrackSeeding_factory>(
-      "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
-      app));
+  std::string b0Seeding = "standard";
+  app->SetDefaultParameter("tracking:B0Seeding", b0Seeding,
+                            "B0 seed finder: standard or telescope (ACTS >= 45.3)");
+  if (b0Seeding != "standard" && b0Seeding != "telescope") {
+    throw std::invalid_argument("tracking:B0Seeding must be standard or telescope");
+  }
+  const bool useTelescope = b0Seeding == "telescope";
+  CKFTrackingConfig b0CKFConfig;
+  AmbiguitySolverConfig b0AmbiguityConfig;
+  if (useTelescope) {
+#if EICRECON_HAS_B0_TELESCOPE
+    app->Add(new JOmniFactoryGeneratorT<B0TelescopeSeeding_factory>(
+        "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
+        app));
+    b0CKFConfig.numMeasurementsMin = 3;
+    b0AmbiguityConfig.n_measurements_min = 3;
+#else
+    throw std::invalid_argument("B0 telescope seeding requires ACTS >= 45.3; rebuild with a newer ACTS");
+#endif
+  } else {
+    app->Add(new JOmniFactoryGeneratorT<TrackSeeding_factory>(
+        "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
+        app));
+  }
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTrajectories", {"B0TrackerSeeds", "B0TrackerMeasurements"},
@@ -384,7 +407,7 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFActsTrackStatesUnfiltered",
           "B0TrackerCKFActsTracksUnfiltered",
       },
-      app));
+      b0CKFConfig, app));
 
   app->Add(new JOmniFactoryGeneratorT<ActsToTracks_factory>(
       "B0TrackerCKFTracksUnfiltered",
@@ -411,7 +434,7 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFActsTrackStates",
           "B0TrackerCKFActsTracks",
       },
-      app));
+      b0AmbiguityConfig, app));
 
   app->Add(new JOmniFactoryGeneratorT<ActsToTracks_factory>("B0TrackerCKFTracks",
                                                             {

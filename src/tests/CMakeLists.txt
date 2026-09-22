@@ -9,6 +9,7 @@ else()
       "Catch2 is not found. Skipping algorithms_test and omnifactory_test...")
 endif()
 
+add_subdirectory(b0_telescope_math_test)
 add_subdirectory(tracking_test)
 add_subdirectory(track_propagation_test)
 add_subdirectory(geometry_navigation_test)
