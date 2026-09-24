@@ -129,7 +129,19 @@ private:
   std::string m_outputTag{""};
   std::string m_outputDir{""};
 
+  /// Pads [mm] around each subdetector tracking volume, not individual layers.
+  /// The longitudinal pad covers the ~4 mm global-z extent of B0 discs tilted
+  /// by 25 mrad; a 1 mm pad lets navigation skip their upstream sensors.
+  /// Keep this below half the gap between neighbouring tracking volumes.
+  double m_layerEnvelopeR{1.0};
+  double m_layerEnvelopeZ{5.0};
+
 public:
+  void setLayerEnvelopeR(double envelope) { m_layerEnvelopeR = envelope; }
+  double getLayerEnvelopeR() const { return m_layerEnvelopeR; }
+  void setLayerEnvelopeZ(double envelope) { m_layerEnvelopeZ = envelope; }
+  double getLayerEnvelopeZ() const { return m_layerEnvelopeZ; }
+
   void setObjWriteIt(bool writeit) { m_objWriteIt = writeit; }
   bool getObjWriteIt() const { return m_objWriteIt; }
   void setPlyWriteIt(bool writeit) { m_plyWriteIt = writeit; }
