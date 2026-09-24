@@ -322,7 +322,9 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFTruthSeededActsTracksUnfiltered",
       },
       {
-          .numMeasurementsMin = 3,
+          .numMeasurementsMin       = 3,
+          .transverseReferencePlane = true,
+          .referenceMaterialEffects = false,
       },
       app));
 
@@ -386,7 +388,9 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFActsTracksUnfiltered",
       },
       {
-          .numMeasurementsMin = 3,
+          .numMeasurementsMin       = 3,
+          .transverseReferencePlane = true,
+          .referenceMaterialEffects = false,
       },
       app));
 
