@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <tuple>
@@ -44,6 +45,7 @@
 #include <Acts/Propagator/PropagatorOptions.hpp>
 #include <Acts/Propagator/StandardAborters.hpp>
 #include <Acts/Surfaces/PerigeeSurface.hpp>
+#include <Acts/Surfaces/PlaneSurface.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/TrackFinding/TrackStateCreator.hpp>
 #include <Acts/TrackFitting/GainMatrixUpdater.hpp>
@@ -192,8 +194,14 @@ void CKFTracking::process(const Input& input, const Output& output) const {
     acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
   }
 
-  //// Construct a perigee surface as the target surface
-  auto pSurface = Acts::Surface::makeShared<Acts::PerigeeSurface>(Acts::Vector3{0., 0., 0.});
+  //// Construct the target surface: a perigee surface, or the transverse plane
+  //// through the origin, which stays well defined for tracks along the beam
+  std::shared_ptr<const Acts::Surface> pSurface;
+  if (m_cfg.transverseReferencePlane) {
+    pSurface = Acts::Surface::makeShared<Acts::PlaneSurface>(Acts::Transform3::Identity());
+  } else {
+    pSurface = Acts::Surface::makeShared<Acts::PerigeeSurface>(Acts::Vector3{0., 0., 0.});
+  }
 
   // Convert algorithm log level to Acts log level for local logger
   const auto spdlog_level = static_cast<spdlog::level::level_enum>(this->level());

@@ -41,6 +41,9 @@ private:
   ParameterRef<std::size_t> m_numMeasurementsMin{
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
+  ParameterRef<bool> m_transverseReferencePlane{
+      this, "TransverseReferencePlane", config().transverseReferencePlane,
+      "Express track parameters on the z = 0 plane instead of the perigee surface"};
 
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 

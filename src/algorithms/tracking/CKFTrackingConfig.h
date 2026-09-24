@@ -13,5 +13,9 @@ struct CKFTrackingConfig {
   std::vector<std::size_t> numMeasurementsCutOff = {10};
 
   std::size_t numMeasurementsMin = 4;
+
+  /// Express track parameters on the z = 0 plane instead of the perigee
+  /// surface, for tracks nearly parallel to the beam line
+  bool transverseReferencePlane = false;
 };
 } // namespace eicrecon
