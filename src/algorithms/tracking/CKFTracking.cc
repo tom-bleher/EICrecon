@@ -251,6 +251,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
                                             acts_logger().cloneWithSuffix("Navigator")),
                             acts_logger().cloneWithSuffix("Propagator"));
   ExtrapolatorOptions extrapolationOptions(gctx, mctx);
+  auto& materialInteractor = extrapolationOptions.actorList.get<Acts::MaterialInteractor>();
+  materialInteractor.multipleScattering = m_cfg.referenceMaterialEffects;
+  materialInteractor.energyLoss         = m_cfg.referenceMaterialEffects;
 
   // Create track container
   auto trackContainer      = std::make_shared<Acts::VectorTrackContainer>();

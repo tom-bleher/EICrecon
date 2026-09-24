@@ -324,6 +324,7 @@ void InitPlugin(JApplication* app) {
       {
           .numMeasurementsMin       = 3,
           .transverseReferencePlane = true,
+          .referenceMaterialEffects = false,
       },
       app));
 
@@ -389,6 +390,7 @@ void InitPlugin(JApplication* app) {
       {
           .numMeasurementsMin       = 3,
           .transverseReferencePlane = true,
+          .referenceMaterialEffects = false,
       },
       app));
 

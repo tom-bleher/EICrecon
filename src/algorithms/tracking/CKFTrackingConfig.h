@@ -17,5 +17,8 @@ struct CKFTrackingConfig {
   /// Express track parameters on the z = 0 plane instead of the perigee
   /// surface, for tracks nearly parallel to the beam line
   bool transverseReferencePlane = false;
+
+  /// Apply material effects when extrapolating tracks to the reference surface
+  bool referenceMaterialEffects = true;
 };
 } // namespace eicrecon
