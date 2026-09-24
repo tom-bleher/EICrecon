@@ -58,6 +58,7 @@
 #include <edm4eic/Measurement2DCollection.h>
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
+#include <edm4hep/Vector3f.h>
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
 #include <Eigen/Core>
@@ -185,8 +186,12 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       ++i;
     }
 
-    // Construct a perigee surface as the target surface
-    auto pSurface = Acts::Surface::makeShared<const Acts::PerigeeSurface>(Acts::Vector3(0, 0, 0));
+    // Seed parameters are expressed on a perigee surface at the seed's perigee
+    // point, the origin for seeds from the interaction region
+    const auto& perigee = track_seed.getPerigee();
+    auto pSurface       = Acts::Surface::makeShared<const Acts::PerigeeSurface>(
+        Acts::Vector3(perigee.x * Acts::UnitConstants::mm, perigee.y * Acts::UnitConstants::mm,
+                            perigee.z * Acts::UnitConstants::mm));
 
     // Create parameters
     acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
