@@ -4,29 +4,15 @@
 #include "B0TripletSeeding.h"
 
 #include <Acts/Definitions/Algebra.hpp>
-#include <Acts/Definitions/Direction.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
-#if Acts_VERSION_MAJOR >= 46
-#include <Acts/EventData/BoundTrackParameters.hpp>
-#else
-#include <Acts/EventData/GenericBoundTrackParameters.hpp>
-#include <Acts/EventData/TrackParameters.hpp>
-#endif
-#include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/TransformationHelpers.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
-#include <Acts/Propagator/ActorList.hpp>
-#include <Acts/Propagator/EigenStepper.hpp>
-#include <Acts/Propagator/Propagator.hpp>
-#include <Acts/Propagator/PropagatorResult.hpp>
 #include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
 #include <Acts/Surfaces/PerigeeSurface.hpp>
-#include <Acts/Surfaces/PlaneSurface.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/Utilities/Result.hpp>
 #include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <edm4eic/Cov6f.h>
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
@@ -38,7 +24,6 @@
 #include <cstddef>
 #include <limits>
 #include <numeric>
-#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -131,14 +116,6 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
            std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
   });
 
-  // CKFTracking expects parameters on a perigee at the origin. The seed is
-  // transported there through the field; this is a change of reference
-  // surface, not a vertex constraint.
-  const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(Acts::Vector3::Zero());
-  Acts::Propagator<Acts::EigenStepper<>> propagator{Acts::EigenStepper<>{field}};
-  decltype(propagator)::Options<> options(gctx, mctx);
-  options.direction = Acts::Direction::Backward();
-
   for (const auto& [residual, points, bField] : candidates) {
     if (track_seeds->size() >= m_cfg.maxSeeds) {
       warning("Keeping {} of {} seed candidates", m_cfg.maxSeeds, candidates.size());
@@ -146,45 +123,39 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     }
     const auto& [a, b, c] = points;
 
-    auto transform          = Acts::Transform3::Identity();
-    transform.translation() = a->position;
-    const auto plane        = Acts::Surface::makeShared<Acts::PlaneSurface>(transform);
 #if Acts_VERSION_MAJOR > 45 || (Acts_VERSION_MAJOR == 45 && Acts_VERSION_MINOR >= 2)
-    const Acts::FreeVector freeParams =
+    Acts::FreeVector freeParams =
         Acts::estimateTrackParamsFromSeed(a->position, a->time, b->position, c->position, bField);
 #else
     Acts::FreeVector freeParams =
         Acts::estimateTrackParamsFromSeed(a->position, b->position, c->position, bField);
     freeParams[Acts::eFreeTime] = a->time;
 #endif
-    const auto local = Acts::transformFreeToBoundParameters(freeParams, *plane, gctx);
-    if (!local.ok() || !local->allFinite() ||
-        std::abs((*local)[Acts::eBoundQOverP]) * m_cfg.minMomentum > 1.) {
+    if (!freeParams.allFinite() ||
+        std::abs(freeParams[Acts::eFreeQOverP]) * m_cfg.minMomentum > 1.) {
       continue;
     }
 
-    // The azimuth of a forward track is poorly defined, so scale its error
-    const double theta  = (*local)[Acts::eBoundTheta];
-    const double qOverP = (*local)[Acts::eBoundQOverP];
+    // Express the seed on a perigee surface just upstream of its first hit,
+    // where it was measured, rather than transporting it to the origin
+    const Acts::Vector3 anchor =
+        a->position - m_cfg.anchorDistance * freeParams.segment<3>(Acts::eFreeDir0);
+    freeParams.segment<3>(Acts::eFreePos0) = anchor;
+    freeParams[Acts::eFreeTime] -= m_cfg.anchorDistance;
+    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
+    const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
+    if (!local.ok() || !local->allFinite()) {
+      continue;
+    }
+    const auto& parameter = *local;
+
+    // The azimuth and the position along the perigee line of a forward track
+    // are poorly defined, so scale their errors
+    const double theta = parameter[Acts::eBoundTheta];
     Acts::BoundVector errors;
-    errors << m_cfg.positionError, m_cfg.positionError, m_cfg.angleError / std::sin(theta),
-        m_cfg.angleError, m_cfg.qOverPRelativeError * std::abs(qOverP), m_cfg.timeError;
-#if Acts_VERSION_MAJOR > 45 || (Acts_VERSION_MAJOR == 45 && Acts_VERSION_MINOR >= 1)
-    const Acts::BoundMatrix covariance = errors.cwiseAbs2().asDiagonal();
-#else
-    const Acts::BoundSquareMatrix covariance = errors.cwiseAbs2().asDiagonal();
-#endif
-
-    const Acts::BoundTrackParameters start(plane, *local, covariance,
-                                           Acts::ParticleHypothesis::pion());
-    const auto result = propagator.propagate(start, *perigee, options);
-    if (!result.ok() || !result->endParameters || !result->endParameters->covariance()) {
-      debug("Seed transport to the perigee failed from z = {} mm",
-            a->position.z() / Acts::UnitConstants::mm);
-      continue;
-    }
-    const auto& parameter      = result->endParameters->parameters();
-    const auto& seedCovariance = *result->endParameters->covariance();
+    errors << m_cfg.positionError, m_cfg.positionError / std::tan(theta),
+        m_cfg.angleError / std::sin(theta), m_cfg.angleError,
+        m_cfg.qOverPRelativeError * std::abs(parameter[Acts::eBoundQOverP]), m_cfg.timeError;
 
     auto pars = track_params->create();
     pars.setType(-1); // type --> seed(-1)
@@ -201,7 +172,7 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     edm4eic::Cov6f cov;
     for (std::size_t i = 0; const auto& [ia, x] : edm4eic_indexed_units) {
       for (std::size_t j = 0; const auto& [ib, y] : edm4eic_indexed_units) {
-        cov(i, j) = seedCovariance(ia, ib) / x / y;
+        cov(i, j) = (ia == ib ? errors[ia] * errors[ia] : 0.) / x / y;
         ++j;
       }
       ++i;
@@ -209,7 +180,9 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     pars.setCovariance(cov);
 
     auto seed = track_seeds->create();
-    seed.setPerigee({0.F, 0.F, 0.F});
+    seed.setPerigee({static_cast<float>(anchor.x() / Acts::UnitConstants::mm * edm4eic::unit::mm),
+                     static_cast<float>(anchor.y() / Acts::UnitConstants::mm * edm4eic::unit::mm),
+                     static_cast<float>(anchor.z() / Acts::UnitConstants::mm * edm4eic::unit::mm)});
     seed.setQuality(static_cast<float>(-residual / Acts::UnitConstants::mm));
     seed.setParams(pars);
     for (const auto* point : points) {

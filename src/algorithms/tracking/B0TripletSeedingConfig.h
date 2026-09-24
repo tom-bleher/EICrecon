@@ -16,6 +16,8 @@ struct B0TripletSeedingConfig {
   double maxResidual = 1. * Acts::UnitConstants::mm;
   /// Minimum momentum of the three-hit estimate
   double minMomentum = 1. * Acts::UnitConstants::GeV;
+  /// Distance upstream of the first hit at which the seed is expressed
+  double anchorDistance = 10. * Acts::UnitConstants::mm;
   /// Maximum number of seeds per event, smallest residual first
   std::size_t maxSeeds = 1000;
 

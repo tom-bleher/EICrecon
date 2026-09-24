@@ -37,6 +37,9 @@ private:
       "max distance of the middle hit from the chord along the magnetic field"};
   ParameterRef<double> m_minMomentum{this, "minMomentum", config().minMomentum,
                                      "min momentum of the seed"};
+  ParameterRef<double> m_anchorDistance{
+      this, "anchorDistance", config().anchorDistance,
+      "distance upstream of the first hit at which seeds are expressed"};
   ParameterRef<std::size_t> m_maxSeeds{this, "maxSeeds", config().maxSeeds,
                                        "max number of seeds per event"};
   ParameterRef<double> m_positionError{this, "position_Error", config().positionError,
