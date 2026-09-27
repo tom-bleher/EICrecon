@@ -39,7 +39,7 @@ private:
                                      "min momentum of the seed"};
   ParameterRef<double> m_anchorDistance{
       this, "anchorDistance", config().anchorDistance,
-      "distance upstream of the first hit at which seeds are expressed"};
+      "path length to transport upstream from the first hit in the magnetic field"};
   ParameterRef<std::size_t> m_maxSeeds{this, "maxSeeds", config().maxSeeds,
                                        "max number of seeds per event"};
   ParameterRef<double> m_positionError{this, "position_Error", config().positionError,
