@@ -42,6 +42,14 @@ private:
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
 
+  ParameterRef<std::size_t> m_numStationsMin{
+      this, "NumStationsMin", config().numStationsMin,
+      "Minimum physical stations with accepted measurements (0 disables the cut)"};
+  ParameterRef<std::string> m_stationReadout{this, "StationReadout", config().stationReadout,
+                                             "Readout defining the telescope stations"};
+  ParameterRef<double> m_stationZGap{this, "StationZGap", config().stationZGap,
+                                     "Minimum global z gap between physical stations"};
+
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
 public:

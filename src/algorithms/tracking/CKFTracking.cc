@@ -42,6 +42,10 @@
 #include <ActsExamples/EventData/GeometryContainers.hpp>
 #include <ActsExamples/EventData/IndexSourceLink.hpp>
 #include <ActsExamples/EventData/Track.hpp>
+#include <DD4hep/DetElement.h>
+#include <DD4hep/Readout.h>
+#include <DD4hep/VolumeManager.h>
+#include <DD4hep/Volumes.h>
 #include <boost/container/vector.hpp>
 #include <edm4eic/Cov3f.h>
 #include <edm4eic/Cov6f.h>
@@ -60,6 +64,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <tuple>
@@ -133,6 +138,33 @@ using namespace Acts::UnitLiterals;
 void CKFTracking::init() {
   m_acts_logger = Acts::getDefaultLogger(
       "CKF", eicrecon::SpdlogToActsLevel(static_cast<spdlog::level::level_enum>(this->level())));
+
+  if (m_cfg.numStationsMin > 0) {
+    if (m_cfg.stationReadout.empty()) {
+      throw std::invalid_argument("StationReadout is required when NumStationsMin is enabled");
+    }
+    const auto volman = m_geoSvc->dd4hepDetector()->volumeManager();
+    std::vector<std::pair<std::uint64_t, double>> surfaceZ;
+    for (const auto& [volumeId, surface] : m_geoSvc->surfaceMap()) {
+      if (surface == nullptr || surface->geometryId().sensitive() == 0) {
+        continue;
+      }
+      const auto placement = volman.lookupContext(volumeId)->volumePlacement();
+      const dd4hep::SensitiveDetector sensitive{placement.volume().sensitiveDetector()};
+      if (!sensitive.isValid() || !sensitive.readout().isValid() ||
+          sensitive.readout().name() != m_cfg.stationReadout) {
+        continue;
+      }
+      surfaceZ.emplace_back(surface->geometryId().value(),
+                            surface->center(m_geoSvc->getActsGeometryContext()).z());
+    }
+    m_surfaceStations = makeSurfaceStationMap(std::move(surfaceZ), m_cfg.stationZGap);
+    // An absent subsystem is valid for reduced detector configurations. Its
+    // empty measurement collection produces no tracks; unknown surfaces fail
+    // the coverage cut if measurements are nevertheless supplied.
+    debug("Cached {} sensitive surfaces for station selection in {}", m_surfaceStations.size(),
+          m_cfg.stationReadout);
+  }
 
   // eta bins, chi2 and #sourclinks per surface cutoffs
   m_sourcelinkSelectorCfg = {
@@ -294,6 +326,12 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       if (track.nMeasurements() < m_cfg.numMeasurementsMin) {
         trace("Track {} for seed {} has fewer measurements than minimum of {}, skipping",
               track.index(), iseed, m_cfg.numMeasurementsMin);
+        continue;
+      }
+
+      if (!hasTrackStationCoverage(track, m_surfaceStations, m_cfg.numStationsMin)) {
+        trace("Track {} for seed {} fails the minimum {} physical-station requirement, skipping",
+              track.index(), iseed, m_cfg.numStationsMin);
         continue;
       }
 
