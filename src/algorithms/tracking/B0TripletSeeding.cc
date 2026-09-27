@@ -6,6 +6,7 @@
 #include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
+#include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/TransformationHelpers.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
@@ -30,6 +31,7 @@
 
 #include "ActsGeometryProvider.h"
 #include "B0TripletSeedingConfig.h"
+#include "B0SeedTransport.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 
 namespace eicrecon {
@@ -136,26 +138,33 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       continue;
     }
 
-    // Express the seed on a perigee surface just upstream of its first hit,
-    // where it was measured, rather than transporting it to the origin
-    const Acts::Vector3 anchor =
-        a->position - m_cfg.anchorDistance * freeParams.segment<3>(Acts::eFreeDir0);
-    freeParams.segment<3>(Acts::eFreePos0) = anchor;
-    freeParams[Acts::eFreeTime] -= m_cfg.anchorDistance;
-    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
+    // Define the prior where ACTS estimated the parameters: at the first hit.
+    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(a->position);
     const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
     if (!local.ok() || !local->allFinite()) {
       continue;
     }
-    const auto& parameter = *local;
+    const auto& firstParameter = *local;
 
     // The azimuth and the position along the perigee line of a forward track
     // are poorly defined, so scale their errors
-    const double theta = parameter[Acts::eBoundTheta];
+    const double theta = firstParameter[Acts::eBoundTheta];
     Acts::BoundVector errors;
     errors << m_cfg.positionError, m_cfg.positionError / std::tan(theta),
         m_cfg.angleError / std::sin(theta), m_cfg.angleError,
-        m_cfg.qOverPRelativeError * std::abs(parameter[Acts::eBoundQOverP]), m_cfg.timeError;
+        m_cfg.qOverPRelativeError * std::abs(firstParameter[Acts::eBoundQOverP]), m_cfg.timeError;
+    const Acts::BoundTrackParameters::CovarianceMatrix firstCovariance =
+        errors.cwiseAbs2().asDiagonal();
+    const Acts::BoundTrackParameters first{perigee, firstParameter, firstCovariance,
+                                           Acts::ParticleHypothesis::pion()};
+    const auto transported = transportB0Seed(first, m_cfg.anchorDistance, field, gctx, mctx);
+    if (!transported) {
+      trace("Local transport failed for B0 seed");
+      continue;
+    }
+    const auto& parameter  = transported->parameters();
+    const auto& covariance = *transported->covariance();
+    const auto anchor      = transported->referenceSurface().center(gctx);
 
     auto pars = track_params->create();
     pars.setType(-1); // type --> seed(-1)
@@ -172,7 +181,7 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     edm4eic::Cov6f cov;
     for (std::size_t i = 0; const auto& [ia, x] : edm4eic_indexed_units) {
       for (std::size_t j = 0; const auto& [ib, y] : edm4eic_indexed_units) {
-        cov(i, j) = (ia == ib ? errors[ia] * errors[ia] : 0.) / x / y;
+        cov(i, j) = covariance(ia, ib) / x / y;
         ++j;
       }
       ++i;
