@@ -25,7 +25,8 @@ void InitPlugin(JApplication* app) {
       "B0TrackerRawHits", {"EventHeader", "B0TrackerHits"},
       {"B0TrackerRawHits", "B0TrackerRawHitLinks", "B0TrackerRawHitAssociations"},
       {
-          .threshold      = 10.0 * dd4hep::keV,
+          // 0.22 fC in silicon (3.6 eV per pair), about 2 fC after an AC-LGAD gain of 10
+          .threshold      = 5.0 * dd4hep::keV,
           .timeResolution = 30 * edm4eic::unit::ps,
       },
       app));
