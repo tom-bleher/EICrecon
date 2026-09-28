@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 #include "algorithms/tracking/B0SeedTransport.h"
 
@@ -127,4 +128,24 @@ TEST_CASE("B0 local transport handles zero and invalid distances", "[B0SeedTrans
   CHECK_FALSE(eicrecon::transportB0Seed(start, -1., field, gctx, mctx));
   CHECK_FALSE(eicrecon::transportB0Seed(start, std::numeric_limits<double>::quiet_NaN(), field,
                                         gctx, mctx));
+}
+
+TEST_CASE("B0 local transport rejects invalid seeds at any distance", "[B0SeedTransport]") {
+  const auto gctx = geometryContext();
+  const Acts::MagneticFieldContext mctx;
+  const auto field = std::make_shared<Acts::ConstantBField>(Acts::Vector3::Zero());
+  const auto seed  = makeSeed(0.020, 1.);
+  auto covariance  = *seed.covariance();
+  covariance(Acts::eBoundPhi, Acts::eBoundPhi) = std::numeric_limits<double>::infinity();
+  const Acts::BoundTrackParameters invalid{seed.referenceSurface().getSharedPtr(),
+                                           seed.parameters(), covariance,
+                                           seed.particleHypothesis()};
+  const Acts::BoundTrackParameters withoutCovariance{seed.referenceSurface().getSharedPtr(),
+                                                     seed.parameters(), std::nullopt,
+                                                     seed.particleHypothesis()};
+  for (double distance : {0., 10.}) {
+    CAPTURE(distance);
+    CHECK_FALSE(eicrecon::transportB0Seed(invalid, distance, field, gctx, mctx));
+    CHECK_FALSE(eicrecon::transportB0Seed(withoutCovariance, distance, field, gctx, mctx));
+  }
 }
