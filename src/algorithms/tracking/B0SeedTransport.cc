@@ -15,7 +15,8 @@ std::optional<Acts::BoundTrackParameters>
 transportB0Seed(const Acts::BoundTrackParameters& start, double distance,
                 const std::shared_ptr<const Acts::MagneticFieldProvider>& field,
                 const Acts::GeometryContext& gctx, const Acts::MagneticFieldContext& mctx) {
-  if (!std::isfinite(distance) || distance < 0.) {
+  if (!std::isfinite(distance) || distance < 0. || !start.parameters().allFinite() ||
+      !start.covariance() || !start.covariance()->allFinite()) {
     return std::nullopt;
   }
   if (distance == 0.) {
