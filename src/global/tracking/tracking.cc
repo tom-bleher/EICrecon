@@ -323,6 +323,8 @@ void InitPlugin(JApplication* app) {
       },
       {
           .numMeasurementsMin = 3,
+          .numStationsMin     = 3,
+          .stationReadout     = "B0TrackerHits",
       },
       app));
 
@@ -387,6 +389,8 @@ void InitPlugin(JApplication* app) {
       },
       {
           .numMeasurementsMin = 3,
+          .numStationsMin     = 3,
+          .stationReadout     = "B0TrackerHits",
       },
       app));
 
