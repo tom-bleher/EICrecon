@@ -162,8 +162,12 @@ void CKFTracking::init() {
     // An absent subsystem is valid for reduced detector configurations. Its
     // empty measurement collection produces no tracks; unknown surfaces fail
     // the coverage cut if measurements are nevertheless supplied.
-    debug("Cached {} sensitive surfaces for station selection in {}", m_surfaceStations.size(),
-          m_cfg.stationReadout);
+    std::size_t stations = 0;
+    for (const auto& [id, station] : m_surfaceStations) {
+      stations = std::max(stations, station + 1);
+    }
+    info("Requiring {} of {} stations built from {} sensitive surfaces of {}", m_cfg.numStationsMin,
+         stations, m_surfaceStations.size(), m_cfg.stationReadout);
   }
 
   // eta bins, chi2 and #sourclinks per surface cutoffs
