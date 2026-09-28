@@ -19,6 +19,8 @@ add_executable(
   tracking_MPGDHitReconstruction.cc
   digi_MPGDTrackerDigi.cc
   tracking_TrackSeeding.cc
+  tracking_B0TripletSeeding.cc
+  tracking_TrackStationSelector.cc
   pid_MergeTracks.cc
   particle_ChargedCandidateMaker.cc
   particle_flow_CaloRemnantCombiner.cc
@@ -57,3 +59,11 @@ install(TARGETS ${TEST_NAME} DESTINATION bin)
 
 add_test(NAME t_${TEST_NAME} COMMAND env LLVM_PROFILE_FILE=${TEST_NAME}.profraw
                                      $<TARGET_FILE:${TEST_NAME}>)
+
+add_executable(b0_seed_transport_test tracking_B0SeedTransport.cc)
+target_compile_definitions(b0_seed_transport_test
+                           PRIVATE "Acts_VERSION_MAJOR=${Acts_VERSION_MAJOR}"
+                                   "Acts_VERSION_MINOR=${Acts_VERSION_MINOR}")
+target_link_libraries(b0_seed_transport_test PRIVATE Catch2::Catch2WithMain
+                                                   algorithms_tracking_library)
+add_test(NAME t_b0_seed_transport_test COMMAND b0_seed_transport_test)

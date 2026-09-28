@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "CKFTrackingConfig.h"
+#include "TrackStationSelector.h"
 #include "algorithms/interfaces/ActsSvc.h"
 #include "algorithms/interfaces/WithPodConfig.h"
 #include "algorithms/tracking/ActsGeometryProvider.h"
@@ -81,6 +82,7 @@ private:
   std::shared_ptr<const Acts::MagneticFieldProvider> m_BField{m_geoSvc->getFieldProvider()};
 
   Acts::MeasurementSelector::Config m_sourcelinkSelectorCfg;
+  SurfaceStationMap m_surfaceStations;
 
   /// Private access to the logging instance
   const Acts::Logger& acts_logger() const { return *m_acts_logger; }

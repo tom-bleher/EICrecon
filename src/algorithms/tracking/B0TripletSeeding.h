@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <algorithms/algorithm.h>
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "algorithms/interfaces/ActsSvc.h"
 #include "algorithms/interfaces/WithPodConfig.h"
@@ -29,18 +31,22 @@ using B0TripletSeedingAlgorithm = algorithms::Algorithm<
 class B0TripletSeeding : public B0TripletSeedingAlgorithm,
                          public WithPodConfig<B0TripletSeedingConfig> {
 public:
-  B0TripletSeeding(std::string_view name)
+  /// The magnetic field defaults to the one of the ACTS geometry
+  B0TripletSeeding(std::string_view name,
+                   std::shared_ptr<const Acts::MagneticFieldProvider> field = nullptr)
       : B0TripletSeedingAlgorithm{name,
                                   {"inputTrackerHits"},
                                   {"outputTrackSeeds", "outputTrackParameters"},
-                                  "create track seeds from B0 tracker hit triplets"} {}
+                                  "create track seeds from B0 tracker hit triplets"}
+      , m_field{std::move(field)} {}
 
-  void init() final {};
+  void init() final;
   void process(const Input& input, const Output& output) const final;
 
 private:
   const algorithms::ActsSvc& m_actsSvc{algorithms::ActsSvc::instance()};
   std::shared_ptr<const ActsGeometryProvider> m_geoSvc{m_actsSvc.acts_geometry_provider()};
+  std::shared_ptr<const Acts::MagneticFieldProvider> m_field;
 };
 
 } // namespace eicrecon

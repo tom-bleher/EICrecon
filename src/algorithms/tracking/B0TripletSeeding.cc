@@ -6,6 +6,7 @@
 #include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
+#include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/TransformationHelpers.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
@@ -14,6 +15,7 @@
 #include <Acts/Utilities/Result.hpp>
 #include <Eigen/Core>
 #include <edm4eic/Cov6f.h>
+#include <edm4eic/CovDiag3f.h>
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
 #include <edm4hep/Vector3f.h>
@@ -23,16 +25,36 @@
 #include <compare>
 #include <cstddef>
 #include <limits>
-#include <numeric>
+#include <stdexcept>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "ActsGeometryProvider.h"
 #include "B0TripletSeedingConfig.h"
+#include "B0SeedTransport.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 
 namespace eicrecon {
+
+void B0TripletSeeding::init() {
+  for (const double value :
+       {m_cfg.stationGap, m_cfg.maxResidual, m_cfg.minMomentum, m_cfg.positionError,
+        m_cfg.angleError, m_cfg.qOverPRelativeError, m_cfg.timeError}) {
+    if (!std::isfinite(value) || value <= 0.) {
+      throw std::invalid_argument("B0 seeding gaps, cuts and uncertainties must be positive");
+    }
+  }
+  if (!std::isfinite(m_cfg.anchorDistance) || m_cfg.anchorDistance < 0.) {
+    throw std::invalid_argument("B0 seeding anchorDistance must not be negative");
+  }
+  if (!m_field) {
+    m_field = m_geoSvc->getFieldProvider();
+  }
+  if (!m_field) {
+    throw std::runtime_error("B0 seeding needs a magnetic field");
+  }
+}
 
 void B0TripletSeeding::process(const Input& input, const Output& output) const {
   const auto [hits]                = input;
@@ -42,21 +64,29 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     return;
   }
 
-  const auto& gctx = m_geoSvc->getActsGeometryContext();
-  const auto& mctx = m_geoSvc->getActsMagneticFieldContext();
-  const auto field = m_geoSvc->getFieldProvider();
-  auto fieldCache  = field->makeCache(mctx);
+  const auto& gctx  = m_geoSvc->getActsGeometryContext();
+  const auto& mctx  = m_geoSvc->getActsMagneticFieldContext();
+  const auto& field = m_field;
+  auto fieldCache   = field->makeCache(mctx);
 
   struct Point {
     Acts::Vector3 position;
     double time;
+    double variance;
     std::size_t index;
   };
 
   // Group hits into stations: sort by z and start a new station at every gap.
   // Hits on the front and back sensors of a station stay separate points.
-  std::vector<std::size_t> order(hits->size());
-  std::iota(order.begin(), order.end(), 0);
+  std::vector<std::size_t> order;
+  order.reserve(hits->size());
+  for (std::size_t i = 0; i < hits->size(); ++i) {
+    const auto& pos = (*hits)[i].getPosition();
+    if (std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) &&
+        std::isfinite((*hits)[i].getTime())) {
+      order.push_back(i);
+    }
+  }
   auto sortKey = [&](std::size_t i) {
     const auto& pos = (*hits)[i].getPosition();
     return std::tuple{pos.z, pos.x, pos.y, (*hits)[i].getCellID()};
@@ -71,15 +101,22 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
                                  pos.y / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                  pos.z / edm4eic::unit::mm * Acts::UnitConstants::mm};
     const double time = (*hits)[i].getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns;
-    if (position.z() - lastZ > m_cfg.stationGap) {
+    // The hit covariance is diagonal in local sensor coordinates; use its
+    // largest variance as an isotropic position variance
+    const auto& cov       = (*hits)[i].getPositionError();
+    const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
+                            (edm4eic::unit::mm * edm4eic::unit::mm) *
+                            (Acts::UnitConstants::mm * Acts::UnitConstants::mm);
+    if (stations.empty() || position.z() - lastZ > m_cfg.stationGap) {
       stations.emplace_back();
     }
     lastZ = position.z();
-    stations.back().push_back({position, time, i});
+    stations.back().push_back({position, time, variance, i});
   }
 
-  // Triplets of hits on three stations. A helix does not bend along the field,
-  // so the middle hit must lie on the chord of the outer two in that direction.
+  // Triplets of hits on three stations. In a constant field the motion along
+  // the field is uniform, so for forward tracks, which advance uniformly in z,
+  // the middle hit lies close to the chord of the outer two in that direction.
   struct Candidate {
     double residual;
     std::array<const Point*, 3> points;
@@ -110,11 +147,9 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       }
     }
   }
-  std::ranges::sort(candidates, [](const auto& lhs, const auto& rhs) {
-    return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
-                    lhs.points[2]->index) <
-           std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
-  });
+  // Candidates are enumerated in the sorted hit order, so a stable sort keeps
+  // ties, and with them the maxSeeds truncation, independent of input order
+  std::ranges::stable_sort(candidates, {}, &Candidate::residual);
 
   for (const auto& [residual, points, bField] : candidates) {
     if (track_seeds->size() >= m_cfg.maxSeeds) {
@@ -136,26 +171,68 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       continue;
     }
 
-    // Express the seed on a perigee surface just upstream of its first hit,
-    // where it was measured, rather than transporting it to the origin
-    const Acts::Vector3 anchor =
-        a->position - m_cfg.anchorDistance * freeParams.segment<3>(Acts::eFreeDir0);
-    freeParams.segment<3>(Acts::eFreePos0) = anchor;
-    freeParams[Acts::eFreeTime] -= m_cfg.anchorDistance;
-    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
+    // Define the prior where ACTS estimated the parameters: at the first hit.
+    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(a->position);
     const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
     if (!local.ok() || !local->allFinite()) {
       continue;
     }
-    const auto& parameter = *local;
+    const auto& firstParameter = *local;
+
+    // A relative q/p error vanishes for a straight triplet. The three hits
+    // resolve the curvature only up to their sagitta error over the lever arms
+    // across the field, and |q/p| = curvature * sin(angle to field) / |B|.
+    const Acts::Vector3 fieldDirection = bField.normalized();
+    auto across                        = [&](const Acts::Vector3& v) {
+      return (v - v.dot(fieldDirection) * fieldDirection).norm();
+    };
+    const double d1 = across(b->position - a->position);
+    const double d2 = across(c->position - b->position);
+    const double sagittaVariance =
+        b->variance + (d2 * d2 * a->variance + d1 * d1 * c->variance) / ((d1 + d2) * (d1 + d2));
+    const Acts::Vector3 direction = freeParams.segment<3>(Acts::eFreeDir0);
+    const double qOverPResolution = 2. * std::sqrt(sagittaVariance) / (d1 * d2) *
+                                    direction.cross(fieldDirection).norm() / bField.norm();
 
     // The azimuth and the position along the perigee line of a forward track
     // are poorly defined, so scale their errors
-    const double theta = parameter[Acts::eBoundTheta];
+    const double theta = firstParameter[Acts::eBoundTheta];
     Acts::BoundVector errors;
     errors << m_cfg.positionError, m_cfg.positionError / std::tan(theta),
         m_cfg.angleError / std::sin(theta), m_cfg.angleError,
-        m_cfg.qOverPRelativeError * std::abs(parameter[Acts::eBoundQOverP]), m_cfg.timeError;
+        std::max(m_cfg.qOverPRelativeError * std::abs(firstParameter[Acts::eBoundQOverP]),
+                 qOverPResolution),
+        m_cfg.timeError;
+    if (!errors.allFinite() || (errors.array() <= 0.).any()) {
+      trace("Skipping B0 seed without a positive definite prior");
+      continue;
+    }
+    const Acts::BoundTrackParameters::CovarianceMatrix firstCovariance =
+        errors.cwiseAbs2().asDiagonal();
+    const Acts::BoundTrackParameters first{perigee, firstParameter, firstCovariance,
+                                           Acts::ParticleHypothesis::pion()};
+    const auto transported = transportB0Seed(first, m_cfg.anchorDistance, field, gctx, mctx);
+    if (!transported) {
+      trace("Local transport failed for B0 seed");
+      continue;
+    }
+    const auto& parameter  = transported->parameters();
+    const auto& covariance = *transported->covariance();
+    const auto anchor      = transported->referenceSurface().center(gctx);
+
+    edm4eic::Cov6f cov;
+    for (std::size_t i = 0; const auto& [ia, x] : edm4eic_indexed_units) {
+      for (std::size_t j = 0; const auto& [ib, y] : edm4eic_indexed_units) {
+        cov(i, j) = covariance(ia, ib) / x / y;
+        ++j;
+      }
+      ++i;
+    }
+    // The EDM stores single precision
+    if (!std::ranges::all_of(cov.covariance, [](float v) { return std::isfinite(v); })) {
+      trace("Skipping B0 seed whose covariance overflows single precision");
+      continue;
+    }
 
     auto pars = track_params->create();
     pars.setType(-1); // type --> seed(-1)
@@ -169,14 +246,6 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
                                       edm4eic::unit::GeV));
     pars.setTime(static_cast<float>(parameter[Acts::eBoundTime] / Acts::UnitConstants::ns *
                                     edm4eic::unit::ns));
-    edm4eic::Cov6f cov;
-    for (std::size_t i = 0; const auto& [ia, x] : edm4eic_indexed_units) {
-      for (std::size_t j = 0; const auto& [ib, y] : edm4eic_indexed_units) {
-        cov(i, j) = (ia == ib ? errors[ia] * errors[ia] : 0.) / x / y;
-        ++j;
-      }
-      ++i;
-    }
     pars.setCovariance(cov);
 
     auto seed = track_seeds->create();
