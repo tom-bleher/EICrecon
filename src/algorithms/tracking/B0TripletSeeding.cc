@@ -14,6 +14,7 @@
 #include <Acts/Utilities/Result.hpp>
 #include <Eigen/Core>
 #include <edm4eic/Cov6f.h>
+#include <edm4eic/CovDiag3f.h>
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
 #include <edm4hep/Vector3f.h>
@@ -23,7 +24,6 @@
 #include <compare>
 #include <cstddef>
 #include <limits>
-#include <numeric>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -44,19 +44,26 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
 
   const auto& gctx = m_geoSvc->getActsGeometryContext();
   const auto& mctx = m_geoSvc->getActsMagneticFieldContext();
-  const auto field = m_geoSvc->getFieldProvider();
+  const auto field = m_field ? m_field : m_geoSvc->getFieldProvider();
   auto fieldCache  = field->makeCache(mctx);
 
   struct Point {
     Acts::Vector3 position;
     double time;
+    double variance;
     std::size_t index;
   };
 
   // Group hits into stations: sort by z and start a new station at every gap.
   // Hits on the front and back sensors of a station stay separate points.
-  std::vector<std::size_t> order(hits->size());
-  std::iota(order.begin(), order.end(), 0);
+  std::vector<std::size_t> order;
+  for (std::size_t i = 0; i < hits->size(); ++i) {
+    const auto& pos = (*hits)[i].getPosition();
+    if (std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) &&
+        std::isfinite((*hits)[i].getTime())) {
+      order.push_back(i);
+    }
+  }
   auto sortKey = [&](std::size_t i) {
     const auto& pos = (*hits)[i].getPosition();
     return std::tuple{pos.z, pos.x, pos.y, (*hits)[i].getCellID()};
@@ -71,11 +78,17 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
                                  pos.y / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                  pos.z / edm4eic::unit::mm * Acts::UnitConstants::mm};
     const double time = (*hits)[i].getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns;
-    if (position.z() - lastZ > m_cfg.stationGap) {
+    // The hit covariance is diagonal in local sensor coordinates; use its
+    // largest variance as an isotropic position variance
+    const auto& cov       = (*hits)[i].getPositionError();
+    const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
+                            (edm4eic::unit::mm * edm4eic::unit::mm) *
+                            (Acts::UnitConstants::mm * Acts::UnitConstants::mm);
+    if (stations.empty() || position.z() - lastZ > m_cfg.stationGap) {
       stations.emplace_back();
     }
     lastZ = position.z();
-    stations.back().push_back({position, time, i});
+    stations.back().push_back({position, time, variance, i});
   }
 
   // Triplets of hits on three stations. A helix does not bend along the field,
@@ -136,6 +149,21 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       continue;
     }
 
+    // A relative q/p error vanishes for a straight triplet. The three hits
+    // resolve the curvature only up to their sagitta error over the lever arms
+    // across the field, and |q/p| = curvature * sin(angle to field) / |B|.
+    const Acts::Vector3 fieldDirection = bField.normalized();
+    auto across                        = [&](const Acts::Vector3& v) {
+      return (v - v.dot(fieldDirection) * fieldDirection).norm();
+    };
+    const double d1 = across(b->position - a->position);
+    const double d2 = across(c->position - b->position);
+    const double sagittaVariance =
+        b->variance + (d2 * d2 * a->variance + d1 * d1 * c->variance) / ((d1 + d2) * (d1 + d2));
+    const Acts::Vector3 direction = freeParams.segment<3>(Acts::eFreeDir0);
+    const double qOverPResolution = 2. * std::sqrt(sagittaVariance) / (d1 * d2) *
+                                    direction.cross(fieldDirection).norm() / bField.norm();
+
     // Express the seed on a perigee surface just upstream of its first hit,
     // where it was measured, rather than transporting it to the origin
     const Acts::Vector3 anchor =
@@ -155,7 +183,13 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     Acts::BoundVector errors;
     errors << m_cfg.positionError, m_cfg.positionError / std::tan(theta),
         m_cfg.angleError / std::sin(theta), m_cfg.angleError,
-        m_cfg.qOverPRelativeError * std::abs(parameter[Acts::eBoundQOverP]), m_cfg.timeError;
+        std::max(m_cfg.qOverPRelativeError * std::abs(parameter[Acts::eBoundQOverP]),
+                 qOverPResolution),
+        m_cfg.timeError;
+    if (!errors.allFinite() || (errors.array() <= 0.).any()) {
+      trace("Skipping B0 seed without a positive definite prior");
+      continue;
+    }
 
     auto pars = track_params->create();
     pars.setType(-1); // type --> seed(-1)
