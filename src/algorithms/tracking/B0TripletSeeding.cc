@@ -147,11 +147,9 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       }
     }
   }
-  std::ranges::sort(candidates, [](const auto& lhs, const auto& rhs) {
-    return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
-                    lhs.points[2]->index) <
-           std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
-  });
+  // Candidates are enumerated in the sorted hit order, so a stable sort keeps
+  // ties, and with them the maxSeeds truncation, independent of input order
+  std::ranges::stable_sort(candidates, {}, &Candidate::residual);
 
   for (const auto& [residual, points, bField] : candidates) {
     if (track_seeds->size() >= m_cfg.maxSeeds) {
