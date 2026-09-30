@@ -23,7 +23,7 @@ void InitPlugin(JApplication* app) {
   using namespace eicrecon;
 
   // AC-LGAD pads share each deposit with their neighbours (electrode size of the BNL sensor
-  // tested on EICROC0: 100 um metal on 500 um pitch)
+  // tested on EICROC0: 100 um metal on 500 um pitch); half the signal is lost at mid-gap
   app->Add(new JOmniFactoryGeneratorT<SiliconChargeSharing_factory>(
       "B0TrackerSharedHits", {"B0TrackerHits"}, {"B0TrackerSharedHits"},
       {
@@ -32,22 +32,24 @@ void InitPlugin(JApplication* app) {
           .model       = SiliconChargeSharingConfig::EModel::trapezoid,
           .electrode_x = 0.1 * dd4hep::mm,
           .electrode_y = 0.1 * dd4hep::mm,
+          .gap_loss    = 0.5,
       },
       app));
 
   // Digitization: noise and threshold act on the summed pad signal, on the deposited-energy
-  // scale (MIP MPV 12.3 keV in 50 um Si). Noise is 1.5% of the MPV and the pad threshold 4 sigma;
-  // the relative term is an effective 2-pad resolution floor. Tuned so that 150 um electrodes
-  // reproduce HPK 500 um-pitch pixel test-beam results (Dutta et al., NIM A (2025) 170224)
+  // scale (MIP MPV 12.3 keV in 50 um Si). Noise is 1.5% of the MPV and the pad threshold 3 sigma,
+  // as for neighbours read out around a fired pad; the relative term is an effective 2-pad
+  // resolution floor. With 150 um electrodes, gap loss, noise and thresholds reproduce HPK
+  // 500 um-pitch pixel test-beam results (Dutta et al., NIM A (2025) 170224)
   app->Add(new JOmniFactoryGeneratorT<SiliconTrackerDigi_factory>(
       "B0TrackerRawHits", {"EventHeader", "B0TrackerSharedHits"},
       {"B0TrackerRawHits", "B0TrackerRawHitLinks", "B0TrackerRawHitAssociations"},
       {
-          .threshold          = 0.74 * dd4hep::keV,
+          .threshold          = 0.55 * dd4hep::keV,
           .timeResolution     = 30 * edm4eic::unit::ps,
           .thresholdOnCellSum = true,
           .noise              = 0.18 * dd4hep::keV,
-          .relativeNoise      = 0.25,
+          .relativeNoise      = 0.20,
       },
       app));
 
@@ -59,12 +61,15 @@ void InitPlugin(JApplication* app) {
       },
       app));
 
-  // Merge the pads of each particle crossing into one cluster hit for tracking. Resolutions are
-  // the core residual widths of the digitization above for 100 um electrodes (41 GeV protons)
+  // Merge the pads of each particle crossing into one cluster hit for tracking. Pads below the
+  // discriminator threshold (13.6% of the MPV, the test-beam trigger level) count only next to
+  // a fired pad, as when the ASIC reads out fired pads and their neighbours.
+  // Resolutions are the core residual widths for 100 um electrodes (41 GeV protons)
   app->Add(new JOmniFactoryGeneratorT<SiliconPadClustering_factory>(
       "B0TrackerClusterHits", {"B0TrackerRecHits"}, {"B0TrackerClusterHits"},
       {
           .readout               = "B0TrackerHits",
+          .seed_threshold        = 1.67 * dd4hep::keV,
           .electrode_x           = 0.1 * dd4hep::mm,
           .electrode_y           = 0.1 * dd4hep::mm,
           .single_pad_resolution = 0.052 * dd4hep::mm,
