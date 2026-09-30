@@ -321,6 +321,7 @@ void InitPlugin(JApplication* app) {
           "B0TrackerCKFTruthSeededActsTracksUnfiltered",
       },
       {
+          .chi2CutOff         = {30.},
           .numMeasurementsMin = 3,
       },
       app));
@@ -383,6 +384,9 @@ void InitPlugin(JApplication* app) {
       {
           "B0TrackerCKFActsTrackStatesUnfiltered",
           "B0TrackerCKFActsTracksUnfiltered",
+      },
+      {
+          .chi2CutOff = {30.},
       },
       app));
 
