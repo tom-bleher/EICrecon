@@ -13,12 +13,14 @@
 #include <TGeoMatrix.h>
 #include <algorithms/algorithm.h>
 #include <edm4hep/SimTrackerHitCollection.h>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
+#include "algorithms/digi/PadResponseTable.h"
 #include "algorithms/digi/SiliconChargeSharingConfig.h"
 #include "algorithms/interfaces/WithPodConfig.h"
 
@@ -64,6 +66,7 @@ private:
       m_xy_range_map;
   const dd4hep::rec::CellIDPositionConverter* m_converter = nullptr;
   dd4hep::Segmentation m_seg;
+  std::unique_ptr<PadResponseTable> m_table;
 };
 
 } // namespace eicrecon

@@ -17,11 +17,12 @@ struct SiliconChargeSharingConfig {
   std::string readout;
   // Pad response: gaussian spreads the deposit with the sigmas above; trapezoid is the AC-LGAD
   // response of TrapezoidPadResponse.h for metal electrodes of electrode_x by electrode_y, with
-  // a fraction gap_loss of the signal lost at mid-gap
-  enum class EModel { gaussian = 0, trapezoid = 1 } model = EModel::gaussian;
-  float electrode_x                                       = 0;
-  float electrode_y                                       = 0;
-  float gap_loss                                          = 0;
+  // a fraction gap_loss of the signal lost at mid-gap; table reads a PadResponseTable file
+  enum class EModel { gaussian = 0, trapezoid = 1, table = 2 } model = EModel::gaussian;
+  float electrode_x                                                  = 0;
+  float electrode_y                                                  = 0;
+  float gap_loss                                                     = 0;
+  std::string table_file;
 };
 
 inline std::istream& operator>>(std::istream& in, SiliconChargeSharingConfig::EModel& model) {
@@ -31,6 +32,8 @@ inline std::istream& operator>>(std::istream& in, SiliconChargeSharingConfig::EM
     model = SiliconChargeSharingConfig::EModel::gaussian;
   } else if (s == "trapezoid" or s == "1") {
     model = SiliconChargeSharingConfig::EModel::trapezoid;
+  } else if (s == "table" or s == "2") {
+    model = SiliconChargeSharingConfig::EModel::table;
   } else {
     in.setstate(std::ios::failbit);
   }
@@ -44,6 +47,9 @@ inline std::ostream& operator<<(std::ostream& out,
     break;
   case SiliconChargeSharingConfig::EModel::trapezoid:
     out << "trapezoid";
+    break;
+  case SiliconChargeSharingConfig::EModel::table:
+    out << "table";
     break;
   default:
     out.setstate(std::ios::failbit);

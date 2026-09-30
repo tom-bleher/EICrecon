@@ -32,6 +32,7 @@ private:
   ParameterRef<float> m_electrode_x{this, "electrodeX", config().electrode_x};
   ParameterRef<float> m_electrode_y{this, "electrodeY", config().electrode_y};
   ParameterRef<float> m_gap_loss{this, "gapLoss", config().gap_loss};
+  ParameterRef<std::string> m_table_file{this, "tableFile", config().table_file};
 
 public:
   void Configure() {

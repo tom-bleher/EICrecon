@@ -22,6 +22,7 @@
 #include <algorithms/geo.h>
 #include <edm4hep/Vector3d.h>
 #include <cmath>
+#include <fstream>
 #include <gsl/pointers>
 #include <numbers>
 #include <set>
@@ -40,6 +41,16 @@ namespace eicrecon {
 void SiliconChargeSharing::init() {
   m_converter = algorithms::GeoSvc::instance().cellIDPositionConverter();
   m_seg       = algorithms::GeoSvc::instance().detector()->readout(m_cfg.readout).segmentation();
+  if (m_cfg.model == SiliconChargeSharingConfig::EModel::table) {
+    std::ifstream file(m_cfg.table_file);
+    if (!file) {
+      throw std::runtime_error("SiliconChargeSharing: cannot open pad response table " +
+                               m_cfg.table_file);
+    }
+    m_table = std::make_unique<PadResponseTable>(file);
+    info("Pad response table {} for {:.3f} x {:.3f} mm pads", m_cfg.table_file, m_table->pitchX(),
+         m_table->pitchY());
+  }
 }
 
 void SiliconChargeSharing::process(const SiliconChargeSharing::Input& input,
@@ -185,6 +196,10 @@ float SiliconChargeSharing::energyAtCell(const double xDimension, const double y
     const double wx = trapezoidPadShare(hitPos.x() - localPos.x(), xDimension, m_cfg.electrode_x);
     const double wy = trapezoidPadShare(hitPos.y() - localPos.y(), yDimension, m_cfg.electrode_y);
     return edep * wx * wy * trapezoidSignalFraction(wx, wy, m_cfg.gap_loss);
+  }
+  if (m_cfg.model == SiliconChargeSharingConfig::EModel::table) {
+    return edep * m_table->fraction((hitPos.x() - localPos.x()) / dd4hep::mm,
+                                    (hitPos.y() - localPos.y()) / dd4hep::mm);
   }
   auto sigma_sharingx = m_cfg.sigma_sharingx;
   auto sigma_sharingy = m_cfg.sigma_sharingy;
