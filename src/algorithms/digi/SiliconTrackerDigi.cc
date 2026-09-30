@@ -21,7 +21,11 @@
 
 namespace eicrecon {
 
-void SiliconTrackerDigi::init() {}
+void SiliconTrackerDigi::init() {
+  if (!m_cfg.thresholdOnCellSum && (m_cfg.noise > 0 || m_cfg.relativeNoise > 0)) {
+    warning("noise and relativeNoise are only applied with thresholdOnCellSum");
+  }
+}
 
 void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
                                  const SiliconTrackerDigi::Output& output) const {
@@ -36,6 +40,8 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
 
   // A map of unique cellIDs with temporary structure RawHit
   std::unordered_map<std::uint64_t, edm4eic::MutableRawTrackerHit> cell_hit_map;
+  // Unrounded energy summed per cell, for thresholdOnCellSum
+  std::unordered_map<std::uint64_t, double> cell_edep;
 
   for (const auto& sim_hit : *sim_hits) {
 
@@ -57,11 +63,12 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
     debug("   time smearing: {:.4f}, resulting time = {:.4f} [ns]", time_smearing, result_time);
     debug("   hit_time_stamp: {} [~ps]", hit_time_stamp);
 
-    if (sim_hit.getEDep() < m_cfg.threshold) {
+    if (!m_cfg.thresholdOnCellSum && sim_hit.getEDep() < m_cfg.threshold) {
       debug("  edep is below threshold of {:.2f} [keV]", m_cfg.threshold / dd4hep::keV);
       continue;
     }
 
+    cell_edep[sim_hit.getCellID()] += sim_hit.getEDep();
     if (!cell_hit_map.contains(sim_hit.getCellID())) {
       // This cell doesn't have hits
       cell_hit_map[sim_hit.getCellID()] = {
@@ -84,6 +91,14 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
   }
 
   for (auto item : cell_hit_map) {
+    if (m_cfg.thresholdOnCellSum) {
+      double edep = cell_edep[item.first];
+      edep += std::hypot(m_cfg.noise, m_cfg.relativeNoise * edep) * gaussian(generator);
+      if (edep <= 0 || edep < m_cfg.threshold) {
+        continue;
+      }
+      item.second.setCharge((std::int32_t)std::llround(edep * 1e6));
+    }
     raw_hits->push_back(item.second);
     auto raw_hit = raw_hits->at(raw_hits->size() - 1);
 

@@ -28,6 +28,9 @@ private:
 
   ParameterRef<double> m_threshold{this, "threshold", config().threshold};
   ParameterRef<double> m_timeResolution{this, "timeResolution", config().timeResolution};
+  ParameterRef<bool> m_thresholdOnCellSum{this, "thresholdOnCellSum", config().thresholdOnCellSum};
+  ParameterRef<double> m_noise{this, "noise", config().noise};
+  ParameterRef<double> m_relativeNoise{this, "relativeNoise", config().relativeNoise};
 
 public:
   void Configure() {
