@@ -203,7 +203,9 @@ JEventProcessorPODIO::JEventProcessorPODIO() {
 
       // Forward & Far forward hits
       "B0TrackerTruthSeeds",
+      "B0TrackerSharedHits",
       "B0TrackerRecHits",
+      "B0TrackerClusterHits",
       "B0TrackerRawHits",
       "B0TrackerHits",
       "B0TrackerRawHitLinks",

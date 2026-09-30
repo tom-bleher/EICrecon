@@ -312,7 +312,7 @@ void InitPlugin(JApplication* app) {
   // B0 TRACKER
 
   app->Add(new JOmniFactoryGeneratorT<TrackerMeasurementFromHits_factory>(
-      "B0TrackerMeasurements", {"B0TrackerRecHits"}, {"B0TrackerMeasurements"}, app));
+      "B0TrackerMeasurements", {"B0TrackerClusterHits"}, {"B0TrackerMeasurements"}, app));
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTruthSeededTrajectories", {"B0TrackerTruthSeeds", "B0TrackerMeasurements"},
@@ -375,7 +375,7 @@ void InitPlugin(JApplication* app) {
       app));
 
   app->Add(new JOmniFactoryGeneratorT<TrackSeeding_factory>(
-      "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
+      "B0TrackerSeeds", {"B0TrackerClusterHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
       app));
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
