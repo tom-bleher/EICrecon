@@ -31,6 +31,7 @@ private:
   ParameterRef<bool> m_thresholdOnCellSum{this, "thresholdOnCellSum", config().thresholdOnCellSum};
   ParameterRef<double> m_noise{this, "noise", config().noise};
   ParameterRef<double> m_relativeNoise{this, "relativeNoise", config().relativeNoise};
+  ParameterRef<int> m_countsPerKeV{this, "countsPerKeV", config().countsPerKeV};
 
 public:
   void Configure() {

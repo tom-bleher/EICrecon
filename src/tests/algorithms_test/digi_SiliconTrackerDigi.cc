@@ -63,3 +63,11 @@ TEST_CASE("threshold on the summed cell energy", "[SiliconTrackerDigi]") {
 
   SECTION("a cell below threshold is dropped") { CHECK(digitize(cfg, {0.8, 0.9}).empty()); }
 }
+
+TEST_CASE("finer charge counts", "[SiliconTrackerDigi]") {
+  const eicrecon::SiliconTrackerDigiConfig cfg{
+      .threshold = 2 * dd4hep::keV, .thresholdOnCellSum = true, .countsPerKeV = 10};
+  const auto raw_hits = digitize(cfg, {1.24, 1.37});
+  REQUIRE(raw_hits.size() == 1);
+  CHECK(raw_hits[0].getCharge() == 26);
+}

@@ -18,6 +18,9 @@ struct SiliconTrackerDigiConfig {
   bool thresholdOnCellSum = false;
   double noise            = 0 * dd4hep::keV;
   double relativeNoise    = 0;
+  // Charge counts per keV of deposited energy in RawTrackerHit; TrackerHitReconstruction must use
+  // the same value. 1 gives integer keV
+  int countsPerKeV = 1;
 };
 
 } // namespace eicrecon

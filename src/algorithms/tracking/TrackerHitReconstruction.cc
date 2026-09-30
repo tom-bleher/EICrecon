@@ -74,10 +74,10 @@ void TrackerHitReconstruction::process(const Input& input, const Output& output)
         edm4eic::CovDiag3f{get_variance(dim[0] / mm),
                            get_variance(dim[1] / mm), // variance (see note above)
                            std::size(dim) > 2 ? get_variance(dim[2] / mm) : 0.},
-        static_cast<float>((double)(raw_hit.getTimeStamp()) / 1000.0), // ns
-        m_cfg.timeResolution,                                          // in ns
-        static_cast<float>(raw_hit.getCharge() / 1.0e6),               // Collected energy (GeV)
-        0.0F);                                                         // Error on the energy
+        static_cast<float>((double)(raw_hit.getTimeStamp()) / 1000.0),          // ns
+        m_cfg.timeResolution,                                                   // in ns
+        static_cast<float>(raw_hit.getCharge() / (1.0e6 * m_cfg.countsPerKeV)), // Energy (GeV)
+        0.0F); // Error on the energy
     rec_hit.setRawHit(raw_hit);
   }
 }

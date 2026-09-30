@@ -6,5 +6,7 @@
 namespace eicrecon {
 struct TrackerHitReconstructionConfig {
   float timeResolution = 10;
+  // Raw charge counts per keV, as set in the digitization
+  int countsPerKeV = 1;
 };
 } // namespace eicrecon

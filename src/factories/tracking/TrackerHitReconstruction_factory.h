@@ -22,6 +22,7 @@ private:
   PodioOutput<edm4eic::TrackerHit> m_rec_hits_output{this};
 
   ParameterRef<float> m_timeResolution{this, "timeResolution", config().timeResolution};
+  ParameterRef<int> m_countsPerKeV{this, "countsPerKeV", config().countsPerKeV};
 
   Service<DD4hep_service> m_geoSvc{this};
 

@@ -72,7 +72,8 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
     if (!cell_hit_map.contains(sim_hit.getCellID())) {
       // This cell doesn't have hits
       cell_hit_map[sim_hit.getCellID()] = {
-          sim_hit.getCellID(), (std::int32_t)std::llround(sim_hit.getEDep() * 1e6),
+          sim_hit.getCellID(),
+          (std::int32_t)std::llround(sim_hit.getEDep() * 1e6 * m_cfg.countsPerKeV),
           hit_time_stamp // ns->ps
       };
     } else {
@@ -86,7 +87,8 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
 
       // sum deposited energy
       auto charge = hit.getCharge();
-      hit.setCharge(charge + (std::int32_t)std::llround(sim_hit.getEDep() * 1e6));
+      hit.setCharge(charge +
+                    (std::int32_t)std::llround(sim_hit.getEDep() * 1e6 * m_cfg.countsPerKeV));
     }
   }
 
@@ -97,7 +99,7 @@ void SiliconTrackerDigi::process(const SiliconTrackerDigi::Input& input,
       if (edep <= 0 || edep < m_cfg.threshold) {
         continue;
       }
-      item.second.setCharge((std::int32_t)std::llround(edep * 1e6));
+      item.second.setCharge((std::int32_t)std::llround(edep * 1e6 * m_cfg.countsPerKeV));
     }
     raw_hits->push_back(item.second);
     auto raw_hit = raw_hits->at(raw_hits->size() - 1);
