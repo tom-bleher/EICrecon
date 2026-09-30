@@ -41,6 +41,7 @@ void InitPlugin(JApplication* app) {
   // as for neighbours read out around a fired pad; the relative term is an effective 2-pad
   // resolution floor. With 150 um electrodes, gap loss, noise and thresholds reproduce HPK
   // 500 um-pitch pixel test-beam results (Dutta et al., NIM A (2025) 170224)
+  // Charges are kept in 0.1 keV counts: integer keV (8% of the MIP peak) degrades the interpolation
   app->Add(new JOmniFactoryGeneratorT<SiliconTrackerDigi_factory>(
       "B0TrackerRawHits", {"EventHeader", "B0TrackerSharedHits"},
       {"B0TrackerRawHits", "B0TrackerRawHitLinks", "B0TrackerRawHitAssociations"},
@@ -50,6 +51,7 @@ void InitPlugin(JApplication* app) {
           .thresholdOnCellSum = true,
           .noise              = 0.18 * dd4hep::keV,
           .relativeNoise      = 0.20,
+          .countsPerKeV       = 10,
       },
       app));
 
@@ -58,6 +60,7 @@ void InitPlugin(JApplication* app) {
       "B0TrackerRecHits", {"B0TrackerRawHits"}, {"B0TrackerRecHits"},
       {
           .timeResolution = 30 * edm4eic::unit::ps,
+          .countsPerKeV   = 10,
       },
       app));
 
@@ -72,8 +75,8 @@ void InitPlugin(JApplication* app) {
           .seed_threshold        = 1.67 * dd4hep::keV,
           .electrode_x           = 0.1 * dd4hep::mm,
           .electrode_y           = 0.1 * dd4hep::mm,
-          .single_pad_resolution = 0.052 * dd4hep::mm,
-          .shared_pad_resolution = 0.030 * dd4hep::mm,
+          .single_pad_resolution = 0.053 * dd4hep::mm,
+          .shared_pad_resolution = 0.026 * dd4hep::mm,
       },
       app));
 }
