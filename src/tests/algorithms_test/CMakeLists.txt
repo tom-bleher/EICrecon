@@ -20,6 +20,7 @@ add_executable(
   digi_MPGDTrackerDigi.cc
   digi_SiliconTrackerDigi.cc
   digi_TrapezoidPadResponse.cc
+  tracking_SharedOffsetCurve.cc
   tracking_TrackSeeding.cc
   pid_MergeTracks.cc
   particle_ChargedCandidateMaker.cc

@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -38,6 +39,13 @@ void SiliconPadClustering::init() {
   if (m_grid == nullptr) {
     throw std::runtime_error("SiliconPadClustering needs a CartesianGridXY readout, not " +
                              seg.type() + " for " + m_cfg.readout);
+  }
+  if (!m_cfg.inversion_file.empty()) {
+    std::ifstream file(m_cfg.inversion_file);
+    if (!file) {
+      throw std::runtime_error("SiliconPadClustering: cannot open " + m_cfg.inversion_file);
+    }
+    m_curve = std::make_unique<SharedOffsetCurve>(file);
   }
   if (m_cfg.electrode_x >= m_grid->gridSizeX() || m_cfg.electrode_y >= m_grid->gridSizeY()) {
     warning("Electrodes are at least as wide as the {} pads: positions are pad centres",
@@ -132,12 +140,14 @@ void SiliconPadClustering::process(const Input& input, const Output& output) con
 
   // Position and resolution along one axis from the energy summed per column of pads: the
   // leading column and its larger adjacent column share the deposit as in trapezoidPadShare.
-  // A cluster wider than two columns (delta ray, overlapping particle) gets pitch/sqrt(12), as
+  // A cluster wider than max_regular_width columns (delta ray, overlapping particle) gets
+  // pitch/sqrt(12), as
   // does a single pad at the sensor edge (half_width), whose outer neighbour does not exist
-  auto axis = [](const std::map<long, double>& columns, long seed_index, double seed_centre,
-                 double pitch, double electrode, double single_resolution, double shared_resolution,
-                 double half_width) {
+  auto axis = [this](const std::map<long, double>& columns, long seed_index, double seed_centre,
+                     double pitch, double electrode, double single_resolution,
+                     double shared_resolution, double half_width) {
     constexpr double sqrt_12 = 3.4641016151;
+    const auto regular       = static_cast<std::size_t>(m_cfg.max_regular_width);
     const auto lead =
         std::ranges::max_element(columns, {}, &std::map<long, double>::value_type::second);
     const double centre   = seed_centre + static_cast<double>(lead->first - seed_index) * pitch;
@@ -152,14 +162,16 @@ void SiliconPadClustering::process(const Input& input, const Output& output) con
     }
     if (direction == 0) {
       const bool edge = std::abs(centre) + pitch > half_width;
-      return std::pair{centre, single_resolution > 0 && columns.size() == 1 && !edge
+      return std::pair{centre, single_resolution > 0 && columns.size() < regular && !edge
                                    ? single_resolution
                                    : pitch / sqrt_12};
     }
     const double f = neighbour_edep / (lead->second + neighbour_edep);
-    return std::pair{
-        centre + static_cast<double>(direction) * trapezoidSharedOffset(f, pitch, electrode),
-        shared_resolution > 0 && columns.size() == 2 ? shared_resolution : pitch / sqrt_12};
+    const double offset =
+        m_curve ? m_curve->offset(f) * dd4hep::mm : trapezoidSharedOffset(f, pitch, electrode);
+    return std::pair{centre + static_cast<double>(direction) * offset,
+                     shared_resolution > 0 && columns.size() <= regular ? shared_resolution
+                                                                        : pitch / sqrt_12};
   };
 
   for (const auto& group : groups) {

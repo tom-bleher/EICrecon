@@ -24,6 +24,12 @@ struct SiliconPadClusteringConfig {
   // or two pads wide; 0 means pitch/sqrt(12), which is also used for wider clusters
   double single_pad_resolution = 0;
   double shared_pad_resolution = 0;
+  // Clusters wider than this many pads along an axis are irregular and get pitch/sqrt(12); two
+  // for a trapezoid response, more when the response leaks to further pads
+  int max_regular_width = 2;
+  // Optional calibrated two-pad position curve (SharedOffsetCurve.h) replacing the trapezoid
+  // inversion, for sensors whose sharing is not trapezoidal
+  std::string inversion_file;
 };
 
 } // namespace eicrecon

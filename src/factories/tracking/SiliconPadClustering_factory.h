@@ -30,6 +30,8 @@ private:
                                                config().single_pad_resolution};
   ParameterRef<double> m_shared_pad_resolution{this, "sharedPadResolution",
                                                config().shared_pad_resolution};
+  ParameterRef<std::string> m_inversion_file{this, "inversionFile", config().inversion_file};
+  ParameterRef<int> m_max_regular_width{this, "maxRegularWidth", config().max_regular_width};
 
   Service<DD4hep_service> m_geoSvc{this};
 

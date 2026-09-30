@@ -7,9 +7,11 @@
 #include <DDSegmentation/CartesianGridXY.h>
 #include <algorithms/algorithm.h>
 #include <edm4eic/TrackerHitCollection.h>
+#include <memory>
 #include <string>
 #include <string_view>
 
+#include "SharedOffsetCurve.h"
 #include "SiliconPadClusteringConfig.h"
 #include "algorithms/interfaces/WithPodConfig.h"
 
@@ -41,6 +43,7 @@ public:
 private:
   const dd4hep::rec::CellIDPositionConverter* m_converter = nullptr;
   const dd4hep::DDSegmentation::CartesianGridXY* m_grid   = nullptr;
+  std::unique_ptr<SharedOffsetCurve> m_curve;
 };
 
 } // namespace eicrecon
