@@ -44,3 +44,13 @@ TEST_CASE("electrode as wide as the pitch means no sharing", "[TrapezoidPadRespo
   CHECK(trapezoidPadShare(0.2, 0.5, 0.5) == 1.0);
   CHECK(trapezoidPadShare(0.3, 0.5, 0.5) == 0.0);
 }
+
+TEST_CASE("signal loss grows with the distance from the metal", "[TrapezoidPadResponse]") {
+  using eicrecon::trapezoidSignalFraction;
+  const double loss = 0.5;
+  CHECK_THAT(trapezoidSignalFraction(1.0, 1.0, loss), WithinAbs(1.0, 1e-12)); // on the metal
+  CHECK_THAT(trapezoidSignalFraction(0.5, 1.0, loss), WithinAbs(0.5, 1e-12)); // mid-gap
+  CHECK_THAT(trapezoidSignalFraction(0.5, 0.5, loss), WithinAbs(0.5, 1e-12)); // corner, saturated
+  CHECK_THAT(trapezoidSignalFraction(0.25, 1.0, loss), WithinAbs(0.75, 1e-12));
+  CHECK_THAT(trapezoidSignalFraction(0.875, 1.0, loss), WithinAbs(0.875, 1e-12));
+}

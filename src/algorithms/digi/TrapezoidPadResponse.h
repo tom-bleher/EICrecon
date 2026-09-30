@@ -23,6 +23,17 @@ inline double trapezoidPadShare(double offset, double pitch, double electrode) {
   return std::clamp((pitch - 0.5 * electrode - std::abs(offset)) / (pitch - electrode), 0.0, 1.0);
 }
 
+/// Fraction of the deposit that reaches the pads at all, given the x and y shares (wx, wy) of any
+/// pad that receives signal. The loss grows with the distance of the deposit from the nearest
+/// metal and saturates at gapLoss from mid-gap on, as test beams measure smaller summed
+/// amplitudes in the gap than on the metal. It is common to all pads, so amplitude ratios and
+/// trapezoidSharedOffset are unaffected.
+inline double trapezoidSignalFraction(double wx, double wy, double gapLoss) {
+  const double sx = std::min(wx, 1.0 - wx);
+  const double sy = std::min(wy, 1.0 - wy);
+  return 1.0 - gapLoss * std::min(2.0 * std::hypot(sx, sy), 1.0);
+}
+
 /// Inverse of trapezoidPadShare for a deposit shared by two adjacent pads: distance of the
 /// deposit from the leading pad centre, towards the neighbour, given the neighbour's fraction
 /// f = A_neighbour / (A_lead + A_neighbour) of the pair amplitude.

@@ -16,10 +16,12 @@ struct SiliconChargeSharingConfig {
   float min_edep;
   std::string readout;
   // Pad response: gaussian spreads the deposit with the sigmas above; trapezoid is the AC-LGAD
-  // response of TrapezoidPadResponse.h for metal electrodes of electrode_x by electrode_y
+  // response of TrapezoidPadResponse.h for metal electrodes of electrode_x by electrode_y, with
+  // a fraction gap_loss of the signal lost at mid-gap
   enum class EModel { gaussian = 0, trapezoid = 1 } model = EModel::gaussian;
   float electrode_x                                       = 0;
   float electrode_y                                       = 0;
+  float gap_loss                                          = 0;
 };
 
 inline std::istream& operator>>(std::istream& in, SiliconChargeSharingConfig::EModel& model) {
