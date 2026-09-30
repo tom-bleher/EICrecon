@@ -20,6 +20,7 @@ add_executable(
   digi_MPGDTrackerDigi.cc
   tracking_TrackSeeding.cc
   tracking_B0TripletSeeding.cc
+  tracking_TrackExtrapolation.cc
   pid_MergeTracks.cc
   particle_ChargedCandidateMaker.cc
   particle_flow_CaloRemnantCombiner.cc

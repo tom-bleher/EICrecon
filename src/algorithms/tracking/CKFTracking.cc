@@ -4,7 +4,6 @@
 #include "CKFTracking.h"
 
 #include <Acts/Definitions/Algebra.hpp>
-#include <Acts/Definitions/Direction.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #if Acts_VERSION_MAJOR >= 46
@@ -69,6 +68,7 @@
 // IWYU pragma: no_include <Acts/Utilities/detail/ContainerIterator.hpp>
 
 #include "ActsGeometryProvider.h"
+#include "TrackExtrapolation.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 #include "extensions/spdlog/SpdlogFormatters.h" // IWYU pragma: keep
 #include "extensions/spdlog/SpdlogToActs.h"
@@ -252,27 +252,6 @@ void CKFTracking::process(const Input& input, const Output& output) const {
                             acts_logger().cloneWithSuffix("Propagator"));
   ExtrapolatorOptions extrapolationOptions(gctx, mctx);
 
-  // Extrapolate from the first measurement against the momentum, as a track starts before it
-  auto extrapolateBackward = [&](auto& track, const Acts::Surface& surface) -> Acts::Result<void> {
-    auto first = Acts::findFirstMeasurementState(track);
-    if (!first.ok()) {
-      return first.error();
-    }
-    auto backwardOptions      = extrapolationOptions;
-    backwardOptions.direction = Acts::Direction::Backward();
-    auto propagation =
-        extrapolator
-            .propagate<Acts::BoundTrackParameters, ExtrapolatorOptions, Acts::ForcedSurfaceReached>(
-                track.createParametersFromState(*first), surface, backwardOptions);
-    if (!propagation.ok()) {
-      return propagation.error();
-    }
-    track.setReferenceSurface(surface.getSharedPtr());
-    track.parameters() = propagation->endParameters.value().parameters();
-    track.covariance() = propagation->endParameters.value().covariance().value();
-    return Acts::Result<void>::success();
-  };
-
   // Create track container
   auto trackContainer      = std::make_shared<Acts::VectorTrackContainer>();
   auto trackStateContainer = std::make_shared<Acts::VectorMultiTrajectory>();
@@ -326,23 +305,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         continue;
       }
 
-      auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
-
-      // The helper propagates towards where the straight tangent at the first or last state meets
-      // the perigee line. The tangent of a track bending towards the beam line in a dipole meets it
-      // downstream, and the propagation leaves the world. Retry backward; a displaced track that
-      // passes the beam line nowhere near its origin is kept on the perigee of its seed.
-      if (!extrapolationResult.ok()) {
-        debug("Extrapolation for seed {} and track {} failed with error {}, retrying backward",
-              iseed, track.index(), extrapolationResult.error().message());
-        extrapolationResult = extrapolateBackward(track, *pSurface);
-        if (!extrapolationResult.ok()) {
-          extrapolationResult =
-              extrapolateBackward(track, acts_init_trk_params.at(iseed).referenceSurface());
-        }
-      }
+      auto extrapolationResult = extrapolateTrackToPerigee(
+          track, *pSurface, acts_init_trk_params.at(iseed).referenceSurface(), extrapolator,
+          extrapolationOptions, acts_logger());
 
       if (!extrapolationResult.ok()) {
         debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
