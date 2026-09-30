@@ -15,7 +15,39 @@ struct SiliconChargeSharingConfig {
   float sigma_sharingy;
   float min_edep;
   std::string readout;
+  // Pad response: gaussian spreads the deposit with the sigmas above; trapezoid is the AC-LGAD
+  // response of TrapezoidPadResponse.h for metal electrodes of electrode_x by electrode_y
+  enum class EModel { gaussian = 0, trapezoid = 1 } model = EModel::gaussian;
+  float electrode_x                                       = 0;
+  float electrode_y                                       = 0;
 };
+
+inline std::istream& operator>>(std::istream& in, SiliconChargeSharingConfig::EModel& model) {
+  std::string s;
+  in >> s;
+  if (s == "gaussian" or s == "0") {
+    model = SiliconChargeSharingConfig::EModel::gaussian;
+  } else if (s == "trapezoid" or s == "1") {
+    model = SiliconChargeSharingConfig::EModel::trapezoid;
+  } else {
+    in.setstate(std::ios::failbit);
+  }
+  return in;
+}
+inline std::ostream& operator<<(std::ostream& out,
+                                const SiliconChargeSharingConfig::EModel& model) {
+  switch (model) {
+  case SiliconChargeSharingConfig::EModel::gaussian:
+    out << "gaussian";
+    break;
+  case SiliconChargeSharingConfig::EModel::trapezoid:
+    out << "trapezoid";
+    break;
+  default:
+    out.setstate(std::ios::failbit);
+  }
+  return out;
+}
 
 std::istream& operator>>(std::istream& in, SiliconChargeSharingConfig::ESigmaMode& sigmaMode) {
   std::string s;

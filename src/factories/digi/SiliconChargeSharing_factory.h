@@ -28,6 +28,9 @@ private:
   ParameterRef<std::string> m_readout{this, "readout", config().readout};
   ParameterRef<eicrecon::SiliconChargeSharingConfig::ESigmaMode> m_sigma_mode{this, "sigmaMode",
                                                                               config().sigma_mode};
+  ParameterRef<eicrecon::SiliconChargeSharingConfig::EModel> m_model{this, "model", config().model};
+  ParameterRef<float> m_electrode_x{this, "electrodeX", config().electrode_x};
+  ParameterRef<float> m_electrode_y{this, "electrodeY", config().electrode_y};
 
 public:
   void Configure() {

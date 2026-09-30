@@ -33,6 +33,7 @@
 #include "DD4hep/Detector.h"
 #include "SiliconChargeSharing.h"
 #include "algorithms/digi/SiliconChargeSharingConfig.h"
+#include "algorithms/digi/TrapezoidPadResponse.h"
 
 namespace eicrecon {
 
@@ -180,6 +181,10 @@ dd4hep::Position SiliconChargeSharing::global2Local(const dd4hep::Position& glob
 float SiliconChargeSharing::energyAtCell(const double xDimension, const double yDimension,
                                          const dd4hep::Position localPos,
                                          const dd4hep::Position hitPos, const float edep) const {
+  if (m_cfg.model == SiliconChargeSharingConfig::EModel::trapezoid) {
+    return edep * trapezoidPadShare(hitPos.x() - localPos.x(), xDimension, m_cfg.electrode_x) *
+           trapezoidPadShare(hitPos.y() - localPos.y(), yDimension, m_cfg.electrode_y);
+  }
   auto sigma_sharingx = m_cfg.sigma_sharingx;
   auto sigma_sharingy = m_cfg.sigma_sharingy;
   if (m_cfg.sigma_mode == SiliconChargeSharingConfig::ESigmaMode::rel) {
