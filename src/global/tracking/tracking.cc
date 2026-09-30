@@ -40,6 +40,7 @@
 #include "factories/tracking/TrackProjector_factory.h"
 #include "factories/tracking/TrackPropagation_factory.h"
 #include "factories/tracking/TrackSeeding_factory.h"
+#include "factories/tracking/TrackVertexConstraint_factory.h"
 #include "factories/tracking/TrackerMeasurementFromHits_factory.h"
 #include "factories/tracking/TracksToParticles_factory.h"
 
@@ -551,6 +552,23 @@ void InitPlugin(JApplication* app) {
                                                                 "B0TrackerCKFTrackAssociations",
                                                             },
                                                             app));
+
+  // B0 tracks constrained with the beam spot and the central vertex or tracks, for prompt
+  // particles (the unconstrained B0 tracks stay the ones for decays)
+  app->Add(new JOmniFactoryGeneratorT<TrackVertexConstraint_factory>(
+      "B0TrackerCKFTracksVertexConstrained",
+      {"B0TrackerCKFTracks", "B0TrackerCKFTrackAssociations", "CentralTrackVertices",
+       "CentralCKFTracks"},
+      {"B0TrackerCKFTrackParametersVertexConstrained", "B0TrackerCKFTrajectoriesVertexConstrained",
+       "B0TrackerCKFTracksVertexConstrained", "B0TrackerCKFTrackVertexConstrainedAssociations"},
+      app));
+
+  app->Add(new JOmniFactoryGeneratorT<TracksToParticles_factory>(
+      "B0VertexConstrainedChargedParticlesWithAssociations",
+      {"B0TrackerCKFTracksVertexConstrained", "B0TrackerCKFTrackVertexConstrainedAssociations"},
+      {"B0VertexConstrainedChargedParticles", "B0VertexConstrainedChargedParticleLinks",
+       "B0VertexConstrainedChargedParticleAssociations"},
+      {}, app));
 
   // COMBINED TRACKING
 
