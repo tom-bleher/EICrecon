@@ -71,14 +71,14 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   // Hits on the front and back sensors of a station stay separate points.
   std::vector<std::size_t> order;
   for (std::size_t i = 0; i < hits->size(); ++i) {
-    const auto& pos = (*hits)[i].getPosition();
+    const auto pos = (*hits)[i].getPosition();
     if (std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) &&
         std::isfinite((*hits)[i].getTime())) {
       order.push_back(i);
     }
   }
   auto sortKey = [&](std::size_t i) {
-    const auto& pos = (*hits)[i].getPosition();
+    const auto pos = (*hits)[i].getPosition();
     return std::tuple{pos.z, pos.x, pos.y, (*hits)[i].getCellID()};
   };
   std::ranges::sort(order, [&](std::size_t a, std::size_t b) { return sortKey(a) < sortKey(b); });
@@ -86,14 +86,14 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   std::vector<std::vector<Point>> stations;
   double lastZ = -std::numeric_limits<double>::infinity();
   for (const auto i : order) {
-    const auto& pos = (*hits)[i].getPosition();
+    const auto pos = (*hits)[i].getPosition();
     const Acts::Vector3 position{pos.x / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                  pos.y / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                  pos.z / edm4eic::unit::mm * Acts::UnitConstants::mm};
     const double time = (*hits)[i].getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns;
     // The hit covariance is diagonal in local sensor coordinates; use its
     // largest variance as an isotropic position variance
-    const auto& cov       = (*hits)[i].getPositionError();
+    const auto cov        = (*hits)[i].getPositionError();
     const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
                             (edm4eic::unit::mm * edm4eic::unit::mm) *
                             (Acts::UnitConstants::mm * Acts::UnitConstants::mm);

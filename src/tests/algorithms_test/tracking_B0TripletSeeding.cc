@@ -97,7 +97,7 @@ TEST_CASE("B0 seeds recover the curvature of either charge", "[B0TripletSeeding]
     CHECK(seed.getParams().getTheta() == Catch::Approx(0.01).margin(1.e-5));
     // The default anchor is 10 mm upstream of the first hit
     CHECK(seed.getPerigee().z == Catch::Approx(stationZ0 - 10.).margin(0.01));
-    const auto& cov = seed.getParams().getCovariance();
+    const auto cov = seed.getParams().getCovariance();
     CHECK(std::ranges::all_of(cov.covariance, [](float v) { return std::isfinite(v); }));
     CHECK(cov(4, 4) > 0.F);
   }
