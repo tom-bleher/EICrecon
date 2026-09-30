@@ -23,6 +23,7 @@ private:
 
   ParameterRef<std::string> m_readout{this, "readout", config().readout};
   ParameterRef<double> m_deltaT{this, "deltaT", config().deltaT};
+  ParameterRef<double> m_seed_threshold{this, "seedThreshold", config().seed_threshold};
   ParameterRef<double> m_electrode_x{this, "electrodeX", config().electrode_x};
   ParameterRef<double> m_electrode_y{this, "electrodeY", config().electrode_y};
   ParameterRef<double> m_single_pad_resolution{this, "singlePadResolution",
