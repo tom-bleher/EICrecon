@@ -68,6 +68,7 @@
 // IWYU pragma: no_include <Acts/Utilities/detail/ContainerIterator.hpp>
 
 #include "ActsGeometryProvider.h"
+#include "TrackExtrapolation.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 #include "extensions/spdlog/SpdlogFormatters.h" // IWYU pragma: keep
 #include "extensions/spdlog/SpdlogToActs.h"
@@ -301,9 +302,9 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         continue;
       }
 
-      auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+      auto extrapolationResult = extrapolateTrackToPerigee(
+          track, *pSurface, acts_init_trk_params.at(iseed).referenceSurface(), extrapolator,
+          extrapolationOptions, acts_logger());
 
       if (!extrapolationResult.ok()) {
         debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
