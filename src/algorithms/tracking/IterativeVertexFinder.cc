@@ -4,6 +4,7 @@
 
 #include "IterativeVertexFinder.h"
 
+#include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #if Acts_VERSION_MAJOR >= 46
@@ -15,6 +16,7 @@
 #include <Acts/Propagator/EigenStepper.hpp>
 #include <Acts/Propagator/Propagator.hpp>
 #include <Acts/Propagator/VoidNavigator.hpp>
+#include <Acts/Surfaces/PerigeeSurface.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/Utilities/Logger.hpp>
 #include <Acts/Utilities/Result.hpp>
@@ -40,7 +42,9 @@
 #include <podio/RelationRange.h>
 #include <spdlog/common.h>
 #include <cmath>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -117,6 +121,12 @@ void eicrecon::IterativeVertexFinder::process(const Input& input, const Output& 
   std::vector<Acts::BoundTrackParameters> trackParameters;
   trackParameters.reserve(constTracks.size());
 
+  // The vertex finder fails the whole event on the first track that it cannot propagate to a
+  // vertex candidate, e.g. a far-forward track expressed far from the beam line. Leave out the
+  // tracks that cannot be linearized at the nominal interaction point.
+  const auto origin = Acts::Surface::makeShared<Acts::PerigeeSurface>(Acts::Vector3::Zero());
+  auto fieldCache   = m_BField->makeCache(mctx);
+
   for (const auto& track : constTracks) {
     // Filter tracks based on minimum number of measurements (hits)
     if (track.nMeasurements() < m_cfg.minTrackHits) {
@@ -125,9 +135,16 @@ void eicrecon::IterativeVertexFinder::process(const Input& input, const Output& 
       continue;
     }
 
-    // Create BoundTrackParameters and store it
-    trackParameters.emplace_back(track.referenceSurface().getSharedPtr(), track.parameters(),
-                                 track.covariance(), track.particleHypothesis());
+    const Acts::BoundTrackParameters parameters(track.referenceSurface().getSharedPtr(),
+                                                track.parameters(), track.covariance(),
+                                                track.particleHypothesis());
+    if (!linearizer.linearizeTrack(parameters, 0., *origin, gctx, mctx, fieldCache).ok()) {
+      debug("Track rejected: cannot be linearized at the nominal interaction point");
+      continue;
+    }
+
+    // Store the BoundTrackParameters
+    trackParameters.push_back(parameters);
     // Create InputTrack from stored parameters
     inputTracks.emplace_back(&trackParameters.back());
     trace("Track local position at input = {} mm, {} mm",
@@ -139,6 +156,8 @@ void eicrecon::IterativeVertexFinder::process(const Input& input, const Output& 
   auto result = finder.find(inputTracks, finderOpts, state);
   if (result.ok()) {
     vertices = std::move(result.value());
+  } else {
+    warning("Vertex finding failed with error {}", result.error().message());
   }
 
   for (const auto& vtx : vertices) {
