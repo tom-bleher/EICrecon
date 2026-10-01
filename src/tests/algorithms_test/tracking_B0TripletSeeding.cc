@@ -4,6 +4,8 @@
 #include <Acts/Definitions/Algebra.hpp>
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/MagneticField/ConstantBField.hpp>
+#include <Acts/MagneticField/MagneticFieldProvider.hpp>
+#include <Acts/Utilities/Result.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -14,6 +16,8 @@
 #include <edm4eic/TrackerHitCollection.h>
 #include <edm4hep/Vector3f.h>
 #include <podio/RelationRange.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -69,14 +73,57 @@ void addHit(edm4eic::TrackerHitCollection& hits, std::uint64_t cellID,
               0.F);
 }
 
+/// Dipole field along y with a quadrupole gradient, like the B0 magnet: B = (g y, B0 + g x, 0)
+class QuadrupoleField final : public Acts::MagneticFieldProvider {
+public:
+  static constexpr double dipole   = 1.184 * Acts::UnitConstants::T;
+  static constexpr double gradient = -8.12 * Acts::UnitConstants::T / Acts::UnitConstants::m;
+
+  Cache makeCache(const Acts::MagneticFieldContext& /* mctx */) const override {
+    // The field needs no cache
+    return Cache(std::in_place_type<int>, 0);
+  }
+  Acts::Result<Acts::Vector3> getField(const Acts::Vector3& position,
+                                       Cache& /* cache */) const override {
+    return Acts::Result<Acts::Vector3>::success(fieldAt(position));
+  }
+  static Acts::Vector3 fieldAt(const Acts::Vector3& position) {
+    return {gradient * position.y(), dipole + gradient * position.x(), 0.};
+  }
+};
+
+/// Hits on planes at the given z of a track through the quadrupole field, from Runge-Kutta steps
+std::vector<edm4hep::Vector3f> quadrupoleHits(Acts::Vector3 position, Acts::Vector3 direction,
+                                              double qOverP, const std::vector<double>& zs) {
+  auto derivative = [&](const Acts::Vector3& p, const Acts::Vector3& d) {
+    return std::pair{d, Acts::Vector3{qOverP * d.cross(QuadrupoleField::fieldAt(p))}};
+  };
+  std::vector<edm4hep::Vector3f> hits;
+  for (const double z : zs) {
+    while (position.z() < z) {
+      const double h      = std::min(1., (z - position.z()) / direction.z());
+      const auto [p1, d1] = derivative(position, direction);
+      const auto [p2, d2] = derivative(position + 0.5 * h * p1, direction + 0.5 * h * d1);
+      const auto [p3, d3] = derivative(position + 0.5 * h * p2, direction + 0.5 * h * d2);
+      const auto [p4, d4] = derivative(position + h * p3, direction + h * d3);
+      position += h / 6. * (p1 + 2. * p2 + 2. * p3 + p4);
+      direction = (direction + h / 6. * (d1 + 2. * d2 + 2. * d3 + d4)).normalized();
+    }
+    hits.emplace_back(static_cast<float>(position.x()), static_cast<float>(position.y()),
+                      static_cast<float>(position.z()));
+  }
+  return hits;
+}
+
 struct Result {
   edm4eic::TrackSeedCollection seeds;
   edm4eic::TrackParametersCollection params;
 };
 
 Result run(const edm4eic::TrackerHitCollection& hits,
-           const eicrecon::B0TripletSeedingConfig& cfg = {}) {
-  eicrecon::B0TripletSeeding algo("B0TripletSeeding", field());
+           const eicrecon::B0TripletSeedingConfig& cfg                      = {},
+           std::shared_ptr<const Acts::MagneticFieldProvider> fieldProvider = field()) {
+  eicrecon::B0TripletSeeding algo("B0TripletSeeding", std::move(fieldProvider));
   algo.applyConfig(cfg);
   algo.init();
   Result result;
@@ -220,4 +267,19 @@ TEST_CASE("B0 seeding rejects a non-positive configuration", "[B0TripletSeeding]
   cfg.maxResidual = 0.;
   algo.applyConfig(cfg);
   CHECK_THROWS(algo.init());
+}
+
+TEST_CASE("B0 seeds skip a station in a quadrupole field", "[B0TripletSeeding]") {
+  // A soft track off the magnet midplane, where the field direction turns along the track, on the
+  // stations of the B0 tracker without the third one
+  constexpr double qOverP = -1. / (1.5 * Acts::UnitConstants::GeV);
+  const auto points = quadrupoleHits({20., 60., 5800.}, Acts::Vector3{0.01, 0.01, 1.}.normalized(),
+                                     qOverP, {5850., 6272., 6880.});
+  edm4eic::TrackerHitCollection hits;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    addHit(hits, i + 1, points[i]);
+  }
+  const auto result = run(hits, {}, std::make_shared<QuadrupoleField>());
+  REQUIRE(result.seeds.size() == 1);
+  CHECK(result.params[0].getQOverP() == Catch::Approx(qOverP).epsilon(0.05));
 }

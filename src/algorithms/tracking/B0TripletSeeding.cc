@@ -62,6 +62,7 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
 
   struct Point {
     Acts::Vector3 position;
+    Acts::Vector3 field;
     double time;
     double variance;
     std::size_t index;
@@ -97,16 +98,38 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
                             (edm4eic::unit::mm * edm4eic::unit::mm) *
                             (Acts::UnitConstants::mm * Acts::UnitConstants::mm);
+    // A hit without a field lookup leaves a non-finite field and cannot be the middle of a triplet
+    const auto hitField = field->getField(position, fieldCache);
     if (stations.empty() || position.z() - lastZ > m_cfg.stationGap) {
       stations.emplace_back();
     }
     lastZ = position.z();
-    stations.back().push_back({position, time, variance, i});
+    stations.back().push_back(
+        {position,
+         hitField.ok() ? *hitField
+                       : Acts::Vector3::Constant(std::numeric_limits<double>::quiet_NaN()),
+         time, variance, i});
   }
 
-  // Triplets of hits on three stations. The motion along the field is uniform,
-  // so for forward tracks, which advance almost uniformly in z, the middle hit
-  // lies close to the chord of the outer two in the field direction.
+  // Triplets of hits on three stations. The motion along a uniform field is
+  // uniform, so for forward tracks, which advance almost uniformly in z, the
+  // middle hit lies close to the chord of the outer two in the field direction.
+  // The deviation of the middle hit from the chord is the transverse
+  // acceleration weighted by a hat function over the lever arms h1 and h2 in z.
+  // Simpson's rule on each lever arm turns that into the field at the middle
+  // hit and at the midpoints m1, m2 of the parabola through the triplet,
+  // (2 h1 B(m1) + (h1 + h2) B(b) + 2 h2 B(m2)) / (3 (h1 + h2)). This is the
+  // field that bends the triplet; along its direction the quadrupole component
+  // of the B0 magnet, which turns the field along the track, leaves the middle
+  // hit on the chord.
+  auto onParabola = [](const Point& a, const Point& b, const Point& c, double z) {
+    const double za = a.position.z();
+    const double zb = b.position.z();
+    const double zc = c.position.z();
+    return Acts::Vector3{(z - zb) * (z - zc) / ((za - zb) * (za - zc)) * a.position +
+                         (z - za) * (z - zc) / ((zb - za) * (zb - zc)) * b.position +
+                         (z - za) * (z - zb) / ((zc - za) * (zc - zb)) * c.position};
+  };
   struct Candidate {
     double residual;
     std::array<const Point*, 3> points;
@@ -115,21 +138,29 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   std::vector<Candidate> candidates;
   for (std::size_t i = 0; i < stations.size(); ++i) {
     for (std::size_t j = i + 1; j < stations.size(); ++j) {
-      for (const auto& b : stations[j]) {
-        const auto bField = field->getField(b.position, fieldCache);
-        if (!bField.ok() || bField->norm() == 0.) {
-          continue;
-        }
-        const Acts::Vector3 fieldDirection = bField->normalized();
-        for (std::size_t k = j + 1; k < stations.size(); ++k) {
-          for (const auto& a : stations[i]) {
+      for (std::size_t k = j + 1; k < stations.size(); ++k) {
+        for (const auto& a : stations[i]) {
+          for (const auto& b : stations[j]) {
             for (const auto& c : stations[k]) {
+              const double h1 = b.position.z() - a.position.z();
+              const double h2 = c.position.z() - b.position.z();
+              const auto field1 =
+                  field->getField(onParabola(a, b, c, a.position.z() + 0.5 * h1), fieldCache);
+              const auto field2 =
+                  field->getField(onParabola(a, b, c, b.position.z() + 0.5 * h2), fieldCache);
+              if (!field1.ok() || !field2.ok()) {
+                continue;
+              }
+              const Acts::Vector3 bending =
+                  (2. * h1 * *field1 + (h1 + h2) * b.field + 2. * h2 * *field2) / (3. * (h1 + h2));
+              if (!bending.allFinite() || bending.norm() == 0.) {
+                continue;
+              }
               const Acts::Vector3 chord = c.position - a.position;
-              const double fraction     = (b.position.z() - a.position.z()) / chord.z();
-              const double residual =
-                  std::abs((b.position - a.position - fraction * chord).dot(fieldDirection));
+              const double residual     = std::abs(
+                  (b.position - a.position - h1 / chord.z() * chord).dot(bending.normalized()));
               if (residual < m_cfg.maxResidual) {
-                candidates.push_back({residual, {&a, &b, &c}, *bField});
+                candidates.push_back({residual, {&a, &b, &c}, bending});
               }
             }
           }
