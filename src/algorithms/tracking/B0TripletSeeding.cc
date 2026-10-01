@@ -7,24 +7,26 @@
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #include <Acts/EventData/TransformationHelpers.hpp>
+#include <Acts/Geometry/GeometryContext.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
 #include <Acts/Surfaces/PerigeeSurface.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/Utilities/Result.hpp>
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <edm4eic/Cov6f.h>
 #include <edm4eic/CovDiag3f.h>
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
 #include <edm4hep/Vector3f.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <compare>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
@@ -35,6 +37,130 @@
 #include "extensions/edm4eic/EDM4eicToActs.h"
 
 namespace eicrecon {
+
+namespace {
+
+  /// A hit in Acts units, with the field at its position
+  struct Point {
+    Acts::Vector3 position;
+    Acts::Vector3 field;
+    double time;
+    double variance;
+    std::size_t index;
+  };
+
+  /// Track parameters of a triplet on a perigee just upstream of its first hit
+  struct Seed {
+    double residual = 0.;
+    std::array<const Point*, 3> points{};
+    Acts::Vector3 anchor;
+    Acts::BoundVector parameters;
+    Acts::BoundVector errors;
+  };
+
+  /// Point of the parabola through the triplet at the given z
+  Acts::Vector3 onParabola(const Point& a, const Point& b, const Point& c, double z) {
+    const double za = a.position.z();
+    const double zb = b.position.z();
+    const double zc = c.position.z();
+    return (z - zb) * (z - zc) / ((za - zb) * (za - zc)) * a.position +
+           (z - za) * (z - zc) / ((zb - za) * (zb - zc)) * b.position +
+           (z - za) * (z - zb) / ((zc - za) * (zc - zb)) * c.position;
+  }
+
+  /// The field that bends the triplet. The deviation of the middle hit from the chord of the outer
+  /// two is the transverse acceleration weighted by a hat function over the lever arms h1 and h2 in
+  /// z. Simpson's rule on each lever arm turns that into the field at the middle hit and at the
+  /// midpoints m1, m2 of the parabola through the triplet,
+  /// (2 h1 B(m1) + (h1 + h2) B(b) + 2 h2 B(m2)) / (3 (h1 + h2)).
+  std::optional<Acts::Vector3> bendingField(const Acts::MagneticFieldProvider& field,
+                                            Acts::MagneticFieldProvider::Cache& cache,
+                                            const Point& a, const Point& b, const Point& c) {
+    const double h1   = b.position.z() - a.position.z();
+    const double h2   = c.position.z() - b.position.z();
+    const auto field1 = field.getField(onParabola(a, b, c, a.position.z() + 0.5 * h1), cache);
+    const auto field2 = field.getField(onParabola(a, b, c, b.position.z() + 0.5 * h2), cache);
+    if (!field1.ok() || !field2.ok()) {
+      return std::nullopt;
+    }
+    const Acts::Vector3 bending =
+        (2. * h1 * *field1 + (h1 + h2) * b.field + 2. * h2 * *field2) / (3. * (h1 + h2));
+    if (!bending.allFinite() || bending.norm() == 0.) {
+      return std::nullopt;
+    }
+    return bending;
+  }
+
+  /// Seed from a triplet in the field that bends it, if it passes the momentum limit and has a
+  /// positive definite prior
+  std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
+                               double residual, const Point& a, const Point& b, const Point& c,
+                               const Acts::Vector3& bField) {
+#if Acts_VERSION_MAJOR > 45 || (Acts_VERSION_MAJOR == 45 && Acts_VERSION_MINOR >= 2)
+    Acts::FreeVector freeParams =
+        Acts::estimateTrackParamsFromSeed(a.position, a.time, b.position, c.position, bField);
+#else
+    Acts::FreeVector freeParams =
+        Acts::estimateTrackParamsFromSeed(a.position, b.position, c.position, bField);
+    freeParams[Acts::eFreeTime] = a.time;
+#endif
+    if (!freeParams.allFinite() || std::abs(freeParams[Acts::eFreeQOverP]) * cfg.minMomentum > 1.) {
+      return std::nullopt;
+    }
+
+    // A relative q/p error vanishes for a straight triplet. The three hits
+    // resolve the curvature only up to their sagitta error over the lever arms
+    // across the field, and |q/p| = curvature * sin(angle to field) / |B|.
+    const Acts::Vector3 fieldDirection = bField.normalized();
+    auto across                        = [&](const Acts::Vector3& v) {
+      return (v - v.dot(fieldDirection) * fieldDirection).norm();
+    };
+    const double d1 = across(b.position - a.position);
+    const double d2 = across(c.position - b.position);
+    const double sagittaVariance =
+        b.variance + (d2 * d2 * a.variance + d1 * d1 * c.variance) / ((d1 + d2) * (d1 + d2));
+    const Acts::Vector3 direction = freeParams.segment<3>(Acts::eFreeDir0);
+    const double qOverPResolution = 2. * std::sqrt(sagittaVariance) / (d1 * d2) *
+                                    direction.cross(fieldDirection).norm() / bField.norm();
+
+    // Express the seed on a perigee surface just upstream of its first hit,
+    // where it was measured, rather than transporting it to the origin.
+    // CKFTracking starts the track finding from this seed perigee. The step
+    // back follows the helix to first order: the direction turns at the rate
+    // q/p * (direction x B).
+    const double step          = cfg.anchorDistance;
+    const Acts::Vector3 turn   = freeParams[Acts::eFreeQOverP] * direction.cross(bField);
+    const Acts::Vector3 anchor = a.position - step * direction + 0.5 * step * step * turn;
+    freeParams.segment<3>(Acts::eFreePos0) = anchor;
+    freeParams.segment<3>(Acts::eFreeDir0) = (direction - step * turn).normalized();
+    // Acts measures time in length units (c = 1); the shift assumes beta = 1
+    freeParams[Acts::eFreeTime] -= step;
+    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
+    const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
+    if (!local.ok() || !local->allFinite()) {
+      return std::nullopt;
+    }
+
+    // The azimuth and the position along the perigee line of a forward track
+    // are poorly defined, so scale their errors
+    const double theta = (*local)[Acts::eBoundTheta];
+    Acts::BoundVector errors;
+    errors << cfg.positionError, cfg.positionError / std::tan(theta),
+        cfg.angleError / std::sin(theta), cfg.angleError,
+        std::max(cfg.qOverPRelativeError * std::abs((*local)[Acts::eBoundQOverP]),
+                 qOverPResolution),
+        cfg.timeError;
+    if (!errors.allFinite() || (errors.array() <= 0.).any()) {
+      return std::nullopt;
+    }
+    return Seed{.residual   = residual,
+                .points     = {&a, &b, &c},
+                .anchor     = anchor,
+                .parameters = *local,
+                .errors     = errors};
+  }
+
+} // namespace
 
 void B0TripletSeeding::init() {
   // The negated conjunction also rejects NaN values
@@ -59,14 +185,6 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   const auto& mctx = m_geoSvc->getActsMagneticFieldContext();
   const auto field = m_field ? m_field : m_geoSvc->getFieldProvider();
   auto fieldCache  = field->makeCache(mctx);
-
-  struct Point {
-    Acts::Vector3 position;
-    Acts::Vector3 field;
-    double time;
-    double variance;
-    std::size_t index;
-  };
 
   // Group hits into stations: sort by z and start a new station at every gap.
   // Hits on the front and back sensors of a station stay separate points.
@@ -111,56 +229,51 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
          time, variance, i});
   }
 
+  // Keep the valid seeds with the smallest residuals; the hit indices make the order total, so the
+  // kept seeds do not depend on the order in which they are found. Pruning to maxSeeds whenever
+  // twice as many are kept bounds the memory in busy events.
+  auto byResidual = [](const Seed& lhs, const Seed& rhs) {
+    return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
+                    lhs.points[2]->index) <
+           std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
+  };
+  std::vector<Seed> seeds;
+  std::size_t triplets = 0;
+  auto keepBest        = [&](std::size_t n) {
+    if (seeds.size() > n) {
+      std::ranges::nth_element(seeds, seeds.begin() + static_cast<std::ptrdiff_t>(n), byResidual);
+      seeds.resize(n);
+    }
+  };
+
   // Triplets of hits on three stations. The motion along a uniform field is
   // uniform, so for forward tracks, which advance almost uniformly in z, the
   // middle hit lies close to the chord of the outer two in the field direction.
-  // The deviation of the middle hit from the chord is the transverse
-  // acceleration weighted by a hat function over the lever arms h1 and h2 in z.
-  // Simpson's rule on each lever arm turns that into the field at the middle
-  // hit and at the midpoints m1, m2 of the parabola through the triplet,
-  // (2 h1 B(m1) + (h1 + h2) B(b) + 2 h2 B(m2)) / (3 (h1 + h2)). This is the
-  // field that bends the triplet; along its direction the quadrupole component
-  // of the B0 magnet, which turns the field along the track, leaves the middle
-  // hit on the chord.
-  auto onParabola = [](const Point& a, const Point& b, const Point& c, double z) {
-    const double za = a.position.z();
-    const double zb = b.position.z();
-    const double zc = c.position.z();
-    return Acts::Vector3{(z - zb) * (z - zc) / ((za - zb) * (za - zc)) * a.position +
-                         (z - za) * (z - zc) / ((zb - za) * (zb - zc)) * b.position +
-                         (z - za) * (z - zb) / ((zc - za) * (zc - zb)) * c.position};
-  };
-  struct Candidate {
-    double residual;
-    std::array<const Point*, 3> points;
-    Acts::Vector3 field;
-  };
-  std::vector<Candidate> candidates;
+  // Taking the field that bends the triplet keeps the quadrupole component of
+  // the B0 magnet, which turns the field along the track, out of the residual.
   for (std::size_t i = 0; i < stations.size(); ++i) {
     for (std::size_t j = i + 1; j < stations.size(); ++j) {
       for (std::size_t k = j + 1; k < stations.size(); ++k) {
         for (const auto& a : stations[i]) {
           for (const auto& b : stations[j]) {
             for (const auto& c : stations[k]) {
-              const double h1 = b.position.z() - a.position.z();
-              const double h2 = c.position.z() - b.position.z();
-              const auto field1 =
-                  field->getField(onParabola(a, b, c, a.position.z() + 0.5 * h1), fieldCache);
-              const auto field2 =
-                  field->getField(onParabola(a, b, c, b.position.z() + 0.5 * h2), fieldCache);
-              if (!field1.ok() || !field2.ok()) {
-                continue;
-              }
-              const Acts::Vector3 bending =
-                  (2. * h1 * *field1 + (h1 + h2) * b.field + 2. * h2 * *field2) / (3. * (h1 + h2));
-              if (!bending.allFinite() || bending.norm() == 0.) {
+              const auto bending = bendingField(*field, fieldCache, a, b, c);
+              if (!bending) {
                 continue;
               }
               const Acts::Vector3 chord = c.position - a.position;
-              const double residual     = std::abs(
-                  (b.position - a.position - h1 / chord.z() * chord).dot(bending.normalized()));
-              if (residual < m_cfg.maxResidual) {
-                candidates.push_back({residual, {&a, &b, &c}, bending});
+              const double fraction     = (b.position.z() - a.position.z()) / chord.z();
+              const double residual =
+                  std::abs((b.position - a.position - fraction * chord).dot(bending->normalized()));
+              if (residual >= m_cfg.maxResidual) {
+                continue;
+              }
+              ++triplets;
+              if (auto seed = makeSeed(m_cfg, gctx, residual, a, b, c, *bending)) {
+                seeds.push_back(*seed);
+                if (seeds.size() >= 2 * m_cfg.maxSeeds) {
+                  keepBest(m_cfg.maxSeeds);
+                }
               }
             }
           }
@@ -168,80 +281,10 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       }
     }
   }
-  std::ranges::sort(candidates, [](const auto& lhs, const auto& rhs) {
-    return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
-                    lhs.points[2]->index) <
-           std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
-  });
+  keepBest(m_cfg.maxSeeds);
+  std::ranges::sort(seeds, byResidual);
 
-  for (const auto& [residual, points, bField] : candidates) {
-    if (track_seeds->size() >= m_cfg.maxSeeds) {
-      debug("Keeping {} of {} seed candidates", m_cfg.maxSeeds, candidates.size());
-      break;
-    }
-    const auto& [a, b, c] = points;
-
-#if Acts_VERSION_MAJOR > 45 || (Acts_VERSION_MAJOR == 45 && Acts_VERSION_MINOR >= 2)
-    Acts::FreeVector freeParams =
-        Acts::estimateTrackParamsFromSeed(a->position, a->time, b->position, c->position, bField);
-#else
-    Acts::FreeVector freeParams =
-        Acts::estimateTrackParamsFromSeed(a->position, b->position, c->position, bField);
-    freeParams[Acts::eFreeTime] = a->time;
-#endif
-    if (!freeParams.allFinite() ||
-        std::abs(freeParams[Acts::eFreeQOverP]) * m_cfg.minMomentum > 1.) {
-      continue;
-    }
-
-    // A relative q/p error vanishes for a straight triplet. The three hits
-    // resolve the curvature only up to their sagitta error over the lever arms
-    // across the field, and |q/p| = curvature * sin(angle to field) / |B|.
-    const Acts::Vector3 fieldDirection = bField.normalized();
-    auto across                        = [&](const Acts::Vector3& v) {
-      return (v - v.dot(fieldDirection) * fieldDirection).norm();
-    };
-    const double d1 = across(b->position - a->position);
-    const double d2 = across(c->position - b->position);
-    const double sagittaVariance =
-        b->variance + (d2 * d2 * a->variance + d1 * d1 * c->variance) / ((d1 + d2) * (d1 + d2));
-    const Acts::Vector3 direction = freeParams.segment<3>(Acts::eFreeDir0);
-    const double qOverPResolution = 2. * std::sqrt(sagittaVariance) / (d1 * d2) *
-                                    direction.cross(fieldDirection).norm() / bField.norm();
-
-    // Express the seed on a perigee surface just upstream of its first hit,
-    // where it was measured, rather than transporting it to the origin.
-    // CKFTracking starts the track finding from this seed perigee. The step
-    // back follows the helix to first order: the direction turns at the rate
-    // q/p * (direction x B).
-    const double step          = m_cfg.anchorDistance;
-    const Acts::Vector3 turn   = freeParams[Acts::eFreeQOverP] * direction.cross(bField);
-    const Acts::Vector3 anchor = a->position - step * direction + 0.5 * step * step * turn;
-    freeParams.segment<3>(Acts::eFreePos0) = anchor;
-    freeParams.segment<3>(Acts::eFreeDir0) = (direction - step * turn).normalized();
-    // Acts measures time in length units (c = 1); the shift assumes beta = 1
-    freeParams[Acts::eFreeTime] -= m_cfg.anchorDistance;
-    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
-    const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
-    if (!local.ok() || !local->allFinite()) {
-      continue;
-    }
-    const auto& parameter = *local;
-
-    // The azimuth and the position along the perigee line of a forward track
-    // are poorly defined, so scale their errors
-    const double theta = parameter[Acts::eBoundTheta];
-    Acts::BoundVector errors;
-    errors << m_cfg.positionError, m_cfg.positionError / std::tan(theta),
-        m_cfg.angleError / std::sin(theta), m_cfg.angleError,
-        std::max(m_cfg.qOverPRelativeError * std::abs(parameter[Acts::eBoundQOverP]),
-                 qOverPResolution),
-        m_cfg.timeError;
-    if (!errors.allFinite() || (errors.array() <= 0.).any()) {
-      trace("Skipping B0 seed without a positive definite prior");
-      continue;
-    }
-
+  for (const auto& [residual, points, anchor, parameter, errors] : seeds) {
     auto pars = track_params->create();
     pars.setType(-1); // type --> seed(-1)
     pars.setLoc({static_cast<float>(parameter[Acts::eBoundLoc0] / Acts::UnitConstants::mm *
@@ -273,8 +316,7 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     }
   }
 
-  debug("{} stations, {} triplet candidates, {} seeds", stations.size(), candidates.size(),
-        track_seeds->size());
+  debug("{} stations, {} triplets, {} seeds", stations.size(), triplets, track_seeds->size());
 }
 
 } // namespace eicrecon
