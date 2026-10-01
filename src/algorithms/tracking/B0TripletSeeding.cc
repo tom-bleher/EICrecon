@@ -180,10 +180,14 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
 
     // Express the seed on a perigee surface just upstream of its first hit,
     // where it was measured, rather than transporting it to the origin.
-    // CKFTracking starts the track finding from this seed perigee.
-    const Acts::Vector3 anchor =
-        a->position - m_cfg.anchorDistance * freeParams.segment<3>(Acts::eFreeDir0);
+    // CKFTracking starts the track finding from this seed perigee. The step
+    // back follows the helix to first order: the direction turns at the rate
+    // q/p * (direction x B).
+    const double step          = m_cfg.anchorDistance;
+    const Acts::Vector3 turn   = freeParams[Acts::eFreeQOverP] * direction.cross(bField);
+    const Acts::Vector3 anchor = a->position - step * direction + 0.5 * step * step * turn;
     freeParams.segment<3>(Acts::eFreePos0) = anchor;
+    freeParams.segment<3>(Acts::eFreeDir0) = (direction - step * turn).normalized();
     // Acts measures time in length units (c = 1); the shift assumes beta = 1
     freeParams[Acts::eFreeTime] -= m_cfg.anchorDistance;
     const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);

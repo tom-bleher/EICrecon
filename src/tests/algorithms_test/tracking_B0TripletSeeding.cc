@@ -99,9 +99,11 @@ TEST_CASE("B0 seeds recover the curvature of either charge", "[B0TripletSeeding]
     const auto seed = result.seeds[0];
     CHECK(seed.getHits().size() == 3);
     CHECK(seed.getParams().getQOverP() == Catch::Approx(qOverP).epsilon(0.02));
-    CHECK(seed.getParams().getTheta() == Catch::Approx(0.01).margin(1.e-5));
-    // The default anchor is 10 mm upstream of the first hit
+    // The default anchor is 10 mm upstream of the first hit, where the helix
+    // direction differs from the one at the first hit by 10 mm * curvature
     CHECK(seed.getPerigee().z == Catch::Approx(stationZ0 - 10.).margin(0.01));
+    const double anchorTheta = std::asin(std::sin(0.01) + curvature(qOverP) * 10.);
+    CHECK(seed.getParams().getTheta() == Catch::Approx(anchorTheta).margin(1.e-5));
     const auto cov = seed.getParams().getCovariance();
     CHECK(std::ranges::all_of(cov.covariance, [](float v) { return std::isfinite(v); }));
     CHECK(cov(4, 4) > 0.F);
