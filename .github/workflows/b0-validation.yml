@@ -77,14 +77,14 @@ jobs:
           test -x epic-install/bin/thisepic.sh || { echo "ERROR: thisepic.sh missing"; exit 1; }
           test -f epic-install/share/epic/epic_craterlake.xml || { echo "ERROR: craterlake compact missing"; exit 1; }
           test -f epic-install/share/epic/epic_ip6_extended.xml || { echo "ERROR: ip6_extended compact missing"; exit 1; }
-    - name: Build EICrecon B0 tests
+    - name: Build and install EICrecon
       uses: eic/run-cvmfs-osg-eic-shell@main
       with:
         organization: "eicweb"
         platform-release: "eic_xl:nightly"
         run: |
           cmake --warn-uninitialized -S EICrecon -B EICrecon/build -DCMAKE_INSTALL_PREFIX="$PWD/EICrecon-install" -DCMAKE_BUILD_TYPE=Release
-          cmake --build EICrecon/build -j "$(getconf _NPROCESSORS_ONLN)" --target b0_geometry_test algorithms_test
+          cmake --build EICrecon/build -j "$(getconf _NPROCESSORS_ONLN)" --target install
     - name: Geometry positive and negative controls
       uses: eic/run-cvmfs-osg-eic-shell@main
       with:
@@ -92,8 +92,11 @@ jobs:
         platform-release: "eic_xl:nightly"
         run: |
           set -euo pipefail
-          BIN=EICrecon/build/src/tests/b0_geometry_test/b0_geometry_test
-          test -x "$BIN" || { echo "ERROR: $BIN not built"; exit 1; }
+          # The container ships its own EICrecon libs (without B0 symbols);
+          # LD_LIBRARY_PATH precedes rpath, so the fresh install must win.
+          export LD_LIBRARY_PATH=$PWD/EICrecon-install/lib:$LD_LIBRARY_PATH
+          BIN=EICrecon-install/bin/b0_geometry_test
+          test -x "$BIN" || { echo "ERROR: $BIN not installed"; exit 1; }
           test -f map_branch.cbor || { echo "ERROR: map_branch.cbor missing"; exit 1; }
           test -f map_prefix.cbor || { echo "ERROR: map_prefix.cbor missing"; exit 1; }
           source epic-install/bin/thisepic.sh epic_craterlake >/dev/null
@@ -138,6 +141,8 @@ jobs:
         organization: "eicweb"
         platform-release: "eic_xl:nightly"
         run: |
+          export LD_LIBRARY_PATH=$PWD/EICrecon-install/lib:$LD_LIBRARY_PATH
+          export JANA_PLUGIN_PATH=$PWD/EICrecon-install/lib/EICrecon/plugins${JANA_PLUGIN_PATH:+:${JANA_PLUGIN_PATH}}
           ctest --test-dir EICrecon/build -R 't_algorithms_test|t_b0_geometry_test' --output-on-failure
     - name: Upload B0 evidence
       uses: actions/upload-artifact@v7
