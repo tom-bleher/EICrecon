@@ -13,5 +13,8 @@ struct CKFTrackingConfig {
   std::vector<std::size_t> numMeasurementsCutOff = {10};
 
   std::size_t numMeasurementsMin = 4;
+
+  /// For forward telescopes, extrapolate upstream from the first measurement.
+  bool extrapolateBackwardFromFirst = false;
 };
 } // namespace eicrecon

@@ -4,6 +4,7 @@
 #include "CKFTracking.h"
 
 #include <Acts/Definitions/Algebra.hpp>
+#include <Acts/Definitions/Direction.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #if Acts_VERSION_MAJOR >= 46
@@ -242,11 +243,44 @@ void CKFTracking::process(const Input& input, const Output& output) const {
   using Extrapolator        = Acts::Propagator<Acts::EigenStepper<>, Acts::Navigator>;
   using ExtrapolatorOptions = Extrapolator::template Options<
       Acts::ActorList<Acts::MaterialInteractor, Acts::EndOfWorldReached>>;
+  using BackwardExtrapolatorOptions =
+      Extrapolator::template Options<Acts::ActorList<Acts::MaterialInteractor>>;
   Extrapolator extrapolator(Acts::EigenStepper<>(m_BField),
                             Acts::Navigator({.trackingGeometry = m_geoSvc->trackingGeometry()},
                                             acts_logger().cloneWithSuffix("Navigator")),
                             acts_logger().cloneWithSuffix("Propagator"));
   ExtrapolatorOptions extrapolationOptions(gctx, mctx);
+
+  auto extrapolate = [&](auto& track) -> Acts::Result<void> {
+    if (!m_cfg.extrapolateBackwardFromFirst) {
+      return Acts::extrapolateTrackToReferenceSurface(
+          track, *pSurface, extrapolator, extrapolationOptions,
+          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+    }
+
+    // The straight-line intersection used by the Acts helper can lie downstream
+    // for a track bent by a dipole. A forward telescope needs upstream propagation.
+    auto firstMeasurement = Acts::findFirstMeasurementState(track);
+    if (!firstMeasurement.ok()) {
+      return firstMeasurement.error();
+    }
+    const auto parameters = track.createParametersFromState(*firstMeasurement);
+    // The reference perigee can lie beyond the tracking geometry. Continue
+    // through the field there, with material effects only where modeled.
+    BackwardExtrapolatorOptions backwardOptions(gctx, mctx);
+    backwardOptions.direction = Acts::Direction::Backward();
+    // ForcedSurfaceReached accepts arbitrarily negative intersections and can
+    // reverse the stepping direction towards a downstream perigee instead.
+    auto result = extrapolator.propagate<BackwardExtrapolatorOptions, Acts::SurfaceReached>(
+        parameters, *pSurface, backwardOptions);
+    if (!result.ok()) {
+      return result.error();
+    }
+    track.setReferenceSurface(pSurface);
+    track.parameters() = result->endParameters.value().parameters();
+    track.covariance() = result->endParameters.value().covariance().value();
+    return Acts::Result<void>::success();
+  };
 
   // Create track container
   auto trackContainer      = std::make_shared<Acts::VectorTrackContainer>();
@@ -301,9 +335,7 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         continue;
       }
 
-      auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+      auto extrapolationResult = extrapolate(track);
 
       if (!extrapolationResult.ok()) {
         debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),

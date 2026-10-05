@@ -41,6 +41,9 @@ private:
   ParameterRef<std::size_t> m_numMeasurementsMin{
       this, "NumMeasurementsMin", config().numMeasurementsMin,
       "Minimum number of measurements for ACTS CKF tracking"};
+  ParameterRef<bool> m_extrapolateBackwardFromFirst{
+      this, "ExtrapolateBackwardFromFirst", config().extrapolateBackwardFromFirst,
+      "Extrapolate to the reference perigee backwards from the first measurement"};
 
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
