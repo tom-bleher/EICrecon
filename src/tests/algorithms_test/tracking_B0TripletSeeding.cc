@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <random>
 #include <vector>
 
 #include "algorithms/tracking/B0TripletSeeding.h"
@@ -33,8 +34,9 @@ struct Output {
   edm4eic::TrackParametersCollection parameters;
 };
 
-void seed(const edm4eic::TrackerHitCollection& hits, const B0TripletSeedingConfig& cfg,
-          Output& output, double fieldTesla = 1.) {
+B0TripletSeeding::Stats seed(const edm4eic::TrackerHitCollection& hits,
+                             const B0TripletSeedingConfig& cfg, Output& output,
+                             double fieldTesla = 1.) {
 #if Acts_VERSION_MAJOR >= 45
   const auto gctx = Acts::GeometryContext::dangerouslyDefaultConstruct();
 #else
@@ -42,7 +44,7 @@ void seed(const edm4eic::TrackerHitCollection& hits, const B0TripletSeedingConfi
 #endif
   const Acts::MagneticFieldContext mctx;
   const Acts::ConstantBField field({0., fieldTesla * Acts::UnitConstants::T, 0.});
-  B0TripletSeeding::seedHits(cfg, gctx, mctx, field, hits, output.seeds, output.parameters);
+  return B0TripletSeeding::seedHits(cfg, gctx, mctx, field, hits, output.seeds, output.parameters);
 }
 
 using Triplet = std::array<std::uint64_t, 3>;
@@ -214,17 +216,142 @@ TEST_CASE("B0 seeding rejects invalid configuration and tolerates invalid hits",
   cfg.maxResidual = std::numeric_limits<double>::quiet_NaN();
   algorithm.applyConfig(cfg);
   CHECK_THROWS(algorithm.init());
+  cfg            = {};
+  cfg.stationGap = std::numeric_limits<double>::infinity();
+  algorithm.applyConfig(cfg);
+  CHECK_THROWS(algorithm.init());
+  cfg                     = {};
+  cfg.qOverPRelativeError = std::numeric_limits<double>::infinity();
+  algorithm.applyConfig(cfg);
+  CHECK_THROWS(algorithm.init());
   cfg                = {};
   cfg.anchorDistance = 0.;
   algorithm.applyConfig(cfg);
   CHECK_NOTHROW(algorithm.init());
 
-  edm4eic::TrackerHitCollection hits;
-  addHit(hits, 1, std::numeric_limits<double>::quiet_NaN(), 0., 5900.);
-  addHit(hits, 2, -190., 0., 6200.);
-  addHit(hits, 3, -175., 0., 6500.);
+  // Invalid hits are dropped: a maximum-based variance check would keep the
+  // negative and NaN covariance components below.
+  auto addValid = [](edm4eic::TrackerHitCollection& hits) {
+    for (std::size_t station = 0; station < 3; ++station) {
+      const double z = 5900. + 300. * station;
+      for (std::size_t track = 0; track < 2; ++track) {
+        addHit(hits, 100 * station + track + 1, 0.02 * z + track, 0., z);
+      }
+    }
+  };
+  edm4eic::TrackerHitCollection valid;
+  addValid(valid);
+  Output reference;
+  seed(valid, {}, reference);
+  REQUIRE(!reference.seeds.empty());
+  edm4eic::TrackerHitCollection polluted;
+  addValid(polluted);
+  auto nanPos = polluted.create();
+  nanPos.setCellID(101);
+  nanPos.setPosition({std::numeric_limits<float>::quiet_NaN(), 0.f, 5900.f});
+  nanPos.setPositionError({0.0004f, 0.0004f, 0.0004f});
+  nanPos.setTime(8.f);
+  auto negVar = polluted.create();
+  negVar.setCellID(102);
+  negVar.setPosition({124.f, 0.f, 6200.f});
+  negVar.setPositionError({0.0004f, -1.f, 0.0004f});
+  negVar.setTime(8.f);
+  auto nanVar = polluted.create();
+  nanVar.setCellID(103);
+  nanVar.setPosition({130.f, 0.f, 6500.f});
+  nanVar.setPositionError({0.0004f, 0.0004f, std::numeric_limits<float>::quiet_NaN()});
+  nanVar.setTime(8.f);
   Output output;
-  seed(hits, {}, output);
-  CHECK(output.seeds.empty());
-  CHECK(output.parameters.empty());
+  seed(polluted, {}, output);
+  CHECK(triplets(output) == triplets(reference));
+  CHECK(output.parameters.size() == reference.parameters.size());
+}
+
+TEST_CASE("B0 seeding reports exact diagnostics counters", "[B0TripletSeeding]") {
+  edm4eic::TrackerHitCollection hits;
+  for (std::size_t station = 0; station < 3; ++station) {
+    const double z = 5900. + 300. * station;
+    for (std::size_t track = 0; track < 2; ++track) {
+      addHit(hits, 100 * station + track + 1, 0.02 * z + track, 0., z);
+    }
+  }
+  Output output;
+  const auto stats = seed(hits, {}, output);
+  CHECK(stats.stations == 3);
+  CHECK(stats.enumerated == 8);
+  CHECK(stats.residualPassing == 8);
+  CHECK(stats.rankPruned == 0);
+  CHECK(stats.estimated == 8);
+  CHECK(stats.heapReplacements == 0);
+  CHECK(stats.retained + stats.estimationFailures == 8);
+  CHECK(stats.retained == output.seeds.size());
+
+  B0TripletSeedingConfig capped;
+  capped.maxSeeds = 3;
+  Output saturated;
+  const auto saturatedStats = seed(hits, capped, saturated);
+  CHECK(saturatedStats.retained == 3);
+  CHECK(saturatedStats.estimated + saturatedStats.rankPruned == saturatedStats.residualPassing);
+  CHECK(saturatedStats.retained ==
+        std::min<std::size_t>(3, saturatedStats.estimated - saturatedStats.estimationFailures));
+  CHECK(saturatedStats.rankPruned > 0);
+}
+
+TEST_CASE("B0 capped seeds match the exhaustive reference under saturation", "[B0TripletSeeding]") {
+  struct Hit {
+    std::uint64_t id;
+    double x;
+    double y;
+    double z;
+  };
+  std::vector<Hit> points;
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<double> near(-0.3, 0.3);
+  std::uniform_real_distribution<double> jitter(-0.5, 0.5);
+  std::uniform_real_distribution<double> wild(-50., 50.);
+  std::uint64_t id = 1;
+  for (std::size_t station = 0; station < 4; ++station) {
+    const double z = 5900. + 300. * station;
+    for (int k = 0; k < 3; ++k) {
+      points.push_back({id++, 0.02 * z + jitter(rng), near(rng), z});
+    }
+    for (int k = 0; k < 3; ++k) {
+      points.push_back({id++, wild(rng), wild(rng), z});
+    }
+  }
+  auto build = [](const std::vector<Hit>& order) {
+    edm4eic::TrackerHitCollection hits;
+    for (const auto& point : order) {
+      addHit(hits, point.id, point.x, point.y, point.z);
+    }
+    return hits;
+  };
+  B0TripletSeedingConfig full;
+  full.maxSeeds = 100000;
+  Output reference;
+  const auto referenceStats = seed(build(points), full, reference);
+  REQUIRE(reference.seeds.size() > 7);
+  REQUIRE(reference.seeds.size() < 864);
+  CHECK(referenceStats.rankPruned == 0);
+  for (std::size_t i = 1; i < reference.seeds.size(); ++i) {
+    CHECK(reference.seeds[i - 1].getQuality() >= reference.seeds[i].getQuality());
+  }
+  B0TripletSeedingConfig capped;
+  capped.maxSeeds                            = 7;
+  const auto expected                        = triplets(reference);
+  std::vector<std::vector<Hit>> permutations = {points, points, points};
+  std::shuffle(permutations[1].begin(), permutations[1].end(), rng);
+  std::reverse(permutations[2].begin(), permutations[2].end());
+  for (const auto& order : permutations) {
+    Output output;
+    const auto stats = seed(build(order), capped, output);
+    CHECK(stats.retained == 7);
+    CHECK(stats.estimated + stats.rankPruned == stats.residualPassing);
+    CHECK(stats.heapReplacements > 0);
+    const auto selected = triplets(output);
+    REQUIRE(selected.size() == 7);
+    for (std::size_t i = 0; i < 7; ++i) {
+      CHECK(selected[i] == expected[i]);
+    }
+  }
 }

@@ -73,18 +73,19 @@ namespace {
   }
 
   /// Sorts the hits with a finite position and time by z and splits them into stations at gaps
-  /// larger than stationGap
+  /// larger than stationGap. Each covariance component is validated
+  /// individually: a maximum can hide a negative component or ignore a NaN.
   std::vector<std::vector<Point>> groupStations(const edm4eic::TrackerHitCollection& hits,
                                                 double stationGap,
                                                 const Acts::MagneticFieldProvider& field,
                                                 Acts::MagneticFieldProvider::Cache& fieldCache) {
     std::vector<std::size_t> order;
     for (std::size_t i = 0; i < hits.size(); ++i) {
-      const auto pos        = hits[i].getPosition();
-      const auto cov        = hits[i].getPositionError();
-      const double variance = std::max({cov.xx, cov.yy, cov.zz});
+      const auto pos = hits[i].getPosition();
+      const auto cov = hits[i].getPositionError();
       if (std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) &&
-          std::isfinite(hits[i].getTime()) && std::isfinite(variance) && variance >= 0.) {
+          std::isfinite(hits[i].getTime()) && std::isfinite(cov.xx) && cov.xx >= 0.f &&
+          std::isfinite(cov.yy) && cov.yy >= 0.f && std::isfinite(cov.zz) && cov.zz >= 0.f) {
         order.push_back(i);
       }
     }
@@ -236,12 +237,17 @@ namespace {
 void B0TripletSeeding::init() { validateConfig(m_cfg); }
 
 void B0TripletSeeding::validateConfig(const B0TripletSeedingConfig& cfg) {
-  // The negated conjunction also rejects NaN values
+  // Positive comparisons reject NaN; isfinite additionally rejects infinity.
+  // No parameter permits an infinite value.
   // NOLINTNEXTLINE(readability-simplify-boolean-expr)
-  if (!(cfg.stationGap > 0. && cfg.maxResidual > 0. && cfg.minMomentum > 0. &&
-        cfg.anchorDistance >= 0. && cfg.maxSeeds > 0 && cfg.positionError > 0. &&
-        cfg.angleError > 0. && cfg.qOverPRelativeError > 0. && cfg.timeError > 0.)) {
-    throw std::runtime_error("B0TripletSeeding: configuration values must be positive "
+  if (!(std::isfinite(cfg.stationGap) && cfg.stationGap > 0. && std::isfinite(cfg.maxResidual) &&
+        cfg.maxResidual > 0. && std::isfinite(cfg.minMomentum) && cfg.minMomentum > 0. &&
+        std::isfinite(cfg.anchorDistance) && cfg.anchorDistance >= 0. && cfg.maxSeeds > 0 &&
+        std::isfinite(cfg.positionError) && cfg.positionError > 0. &&
+        std::isfinite(cfg.angleError) && cfg.angleError > 0. &&
+        std::isfinite(cfg.qOverPRelativeError) && cfg.qOverPRelativeError > 0. &&
+        std::isfinite(cfg.timeError) && cfg.timeError > 0.)) {
+    throw std::runtime_error("B0TripletSeeding: configuration values must be positive and finite "
                              "(anchorDistance may be zero)");
   }
 }
@@ -253,25 +259,29 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   const auto& gctx = m_geoSvc->getActsGeometryContext();
   const auto& mctx = m_geoSvc->getActsMagneticFieldContext();
   const auto field = m_geoSvc->getFieldProvider();
-  seedHits(m_cfg, gctx, mctx, *field, *hits, *track_seeds, *track_params);
-  debug("{} hits, {} seeds", hits->size(), track_seeds->size());
+  const auto stats = seedHits(m_cfg, gctx, mctx, *field, *hits, *track_seeds, *track_params);
+  debug("{} hits, {} stations, {} seeds", hits->size(), stats.stations, track_seeds->size());
+  debug("triplets enumerated={}, residual-passing={}, rank-pruned={}, estimated={}, "
+        "estimation-failures={}, heap-replacements={}, retained={}",
+        stats.enumerated, stats.residualPassing, stats.rankPruned, stats.estimated,
+        stats.estimationFailures, stats.heapReplacements, stats.retained);
 }
 
-void B0TripletSeeding::seedHits(const B0TripletSeedingConfig& cfg,
-                                const Acts::GeometryContext& gctx,
-                                const Acts::MagneticFieldContext& mctx,
-                                const Acts::MagneticFieldProvider& field,
-                                const edm4eic::TrackerHitCollection& hits,
-                                edm4eic::TrackSeedCollection& trackSeeds,
-                                edm4eic::TrackParametersCollection& trackParams) {
+B0TripletSeeding::Stats B0TripletSeeding::seedHits(
+    const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
+    const Acts::MagneticFieldContext& mctx, const Acts::MagneticFieldProvider& field,
+    const edm4eic::TrackerHitCollection& hits, edm4eic::TrackSeedCollection& trackSeeds,
+    edm4eic::TrackParametersCollection& trackParams) {
   validateConfig(cfg);
+  Stats stats;
   if (hits.empty() || trackSeeds.size() >= cfg.maxSeeds) {
-    return;
+    return stats;
   }
 
   auto fieldCache = field.makeCache(mctx);
 
   const auto stations = groupStations(hits, cfg.stationGap, field, fieldCache);
+  stats.stations      = stations.size();
 
   // Triplets of hits on three stations. In a uniform field the middle hit of a
   // forward track lies close to the chord of the outer two along the field. The
@@ -295,22 +305,29 @@ void B0TripletSeeding::seedHits(const B0TripletSeedingConfig& cfg,
               continue;
             }
             for (const auto& c : stations[k]) {
+              ++stats.enumerated;
               const double residual = chordResidual(a, b, c);
               if (!(residual < cfg.maxResidual)) {
                 continue;
               }
+              ++stats.residualPassing;
               const Candidate candidate{residual, {&a, &b, &c}};
               if (candidates.size() == limit &&
                   !candidateLess(candidate, candidates.front().candidate)) {
+                ++stats.rankPruned;
                 continue;
               }
+              ++stats.estimated;
               if (const auto seed = makeSeed(cfg, gctx, a, b, c)) {
                 if (candidates.size() == limit) {
                   std::pop_heap(candidates.begin(), candidates.end(), less);
                   candidates.pop_back();
+                  ++stats.heapReplacements;
                 }
                 candidates.push_back({candidate, *seed});
                 std::push_heap(candidates.begin(), candidates.end(), less);
+              } else {
+                ++stats.estimationFailures;
               }
             }
           }
@@ -322,6 +339,8 @@ void B0TripletSeeding::seedHits(const B0TripletSeedingConfig& cfg,
   for (const auto& candidate : candidates) {
     writeSeed(candidate.seed, candidate.candidate, hits, trackSeeds, trackParams);
   }
+  stats.retained = candidates.size();
+  return stats;
 }
 
 } // namespace eicrecon

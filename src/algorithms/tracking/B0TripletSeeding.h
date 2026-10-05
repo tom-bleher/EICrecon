@@ -10,6 +10,7 @@
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -45,13 +46,28 @@ public:
   /// Throw unless the configuration values are usable.
   static void validateConfig(const B0TripletSeedingConfig& cfg);
 
+  /// Counters describing one seedHits call. Rank-pruned candidates were
+  /// skipped by heap rank before parameter estimation, so they are neither
+  /// valid nor invalid.
+  struct Stats {
+    std::size_t stations           = 0;
+    std::size_t enumerated         = 0;
+    std::size_t residualPassing    = 0;
+    std::size_t rankPruned         = 0;
+    std::size_t estimated          = 0;
+    std::size_t estimationFailures = 0;
+    std::size_t heapReplacements   = 0;
+    std::size_t retained           = 0;
+  };
+
   /// Seed hits in a supplied field, independently of the detector service.
-  static void seedHits(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
-                       const Acts::MagneticFieldContext& mctx,
-                       const Acts::MagneticFieldProvider& field,
-                       const edm4eic::TrackerHitCollection& hits,
-                       edm4eic::TrackSeedCollection& trackSeeds,
-                       edm4eic::TrackParametersCollection& trackParams);
+  /// Returns diagnostics counters; appends at most maxSeeds seeds.
+  static Stats seedHits(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
+                        const Acts::MagneticFieldContext& mctx,
+                        const Acts::MagneticFieldProvider& field,
+                        const edm4eic::TrackerHitCollection& hits,
+                        edm4eic::TrackSeedCollection& trackSeeds,
+                        edm4eic::TrackParametersCollection& trackParams);
 
 private:
   const algorithms::ActsSvc& m_actsSvc{algorithms::ActsSvc::instance()};
