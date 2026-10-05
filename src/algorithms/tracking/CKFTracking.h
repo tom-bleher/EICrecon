@@ -70,6 +70,10 @@ public:
                              {"outputActsTrackStates", "outputActsTracks"},
                              "Combinatorial Kalman Filter track finding"} {}
 
+  /// Count longitudinal groups using only accepted measurement surfaces.
+  static std::size_t countMeasurementGroups(const ActsExamples::TrackContainer::TrackProxy& track,
+                                            const Acts::GeometryContext& gctx, double zGap);
+
   void init() final;
   void process(const Input&, const Output&) const final;
 

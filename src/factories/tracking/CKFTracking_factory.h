@@ -45,6 +45,13 @@ private:
       this, "ExtrapolateBackwardFromFirst", config().extrapolateBackwardFromFirst,
       "Extrapolate to the reference perigee backwards from the first measurement"};
 
+  ParameterRef<std::size_t> m_numMeasurementGroupsMin{
+      this, "NumMeasurementGroupsMin", config().numMeasurementGroupsMin,
+      "Minimum number of longitudinal groups of accepted measurement surfaces (0 disables)"};
+  ParameterRef<double> m_measurementGroupZGap{
+      this, "MeasurementGroupZGap", config().measurementGroupZGap,
+      "Longitudinal gap separating accepted measurement groups [mm]"};
+
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
 public:

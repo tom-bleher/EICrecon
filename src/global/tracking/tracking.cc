@@ -324,6 +324,7 @@ void InitPlugin(JApplication* app) {
       {
           .numMeasurementsMin           = 3,
           .extrapolateBackwardFromFirst = true,
+          .numMeasurementGroupsMin      = 3,
       },
       app));
 
@@ -389,6 +390,7 @@ void InitPlugin(JApplication* app) {
       {
           .numMeasurementsMin           = 3,
           .extrapolateBackwardFromFirst = true,
+          .numMeasurementGroupsMin      = 3,
       },
       app));
 

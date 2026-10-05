@@ -22,13 +22,16 @@
 #include <algorithm>
 #include <any>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <tuple>
 #include <utility>
+#include <vector>
 #include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/ProxyAccessor.hpp>
 #include <Acts/EventData/SourceLink.hpp>
@@ -131,7 +134,42 @@ namespace eicrecon {
 
 using namespace Acts::UnitLiterals;
 
+std::size_t
+CKFTracking::countMeasurementGroups(const ActsExamples::TrackContainer::TrackProxy& track,
+                                    const Acts::GeometryContext& gctx, double zGap) {
+  std::vector<double> positions;
+  for (const auto& state : track.trackStatesReversed()) {
+    const auto flags = state.typeFlags();
+#if Acts_VERSION_MAJOR >= 45
+    if (!flags.isMeasurement() || flags.isOutlier() || flags.isHole()) {
+#else
+    if (!flags.test(Acts::TrackStateFlag::MeasurementFlag) ||
+        flags.test(Acts::TrackStateFlag::OutlierFlag) ||
+        flags.test(Acts::TrackStateFlag::HoleFlag)) {
+#endif
+      continue;
+    }
+    const double z = state.referenceSurface().center(gctx).z();
+    if (!std::isfinite(z)) {
+      return 0;
+    }
+    positions.push_back(z);
+  }
+  std::sort(positions.begin(), positions.end());
+  std::size_t groups = positions.empty() ? 0 : 1;
+  for (std::size_t i = 1; i < positions.size(); ++i) {
+    if (positions[i] - positions[i - 1] > zGap) {
+      ++groups;
+    }
+  }
+  return groups;
+}
+
 void CKFTracking::init() {
+  if (m_cfg.numMeasurementGroupsMin > 0 &&
+      !(std::isfinite(m_cfg.measurementGroupZGap) && m_cfg.measurementGroupZGap > 0.)) {
+    throw std::invalid_argument("CKFTracking: MeasurementGroupZGap must be finite and positive");
+  }
   m_acts_logger = Acts::getDefaultLogger(
       "CKF", eicrecon::SpdlogToActsLevel(static_cast<spdlog::level::level_enum>(this->level())));
 
@@ -325,6 +363,14 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       if (track.nMeasurements() < m_cfg.numMeasurementsMin) {
         trace("Track {} for seed {} has fewer measurements than minimum of {}, skipping",
               track.index(), iseed, m_cfg.numMeasurementsMin);
+        continue;
+      }
+
+      if (m_cfg.numMeasurementGroupsMin > 0 &&
+          countMeasurementGroups(track, gctx, m_cfg.measurementGroupZGap) <
+              m_cfg.numMeasurementGroupsMin) {
+        trace("Track {} for seed {} has fewer measurement groups than minimum of {}, skipping",
+              track.index(), iseed, m_cfg.numMeasurementGroupsMin);
         continue;
       }
 

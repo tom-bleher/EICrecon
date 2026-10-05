@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <Acts/Definitions/Units.hpp>
 #include <vector>
 
 namespace eicrecon {
@@ -16,5 +17,11 @@ struct CKFTrackingConfig {
 
   /// For forward telescopes, extrapolate upstream from the first measurement.
   bool extrapolateBackwardFromFirst = false;
+
+  /// Optional minimum number of longitudinal groups of accepted measurements.
+  /// Zero disables the requirement, as appropriate for central tracking.
+  std::size_t numMeasurementGroupsMin = 0;
+  /// Gaps larger than this separate physical stations in a forward telescope.
+  double measurementGroupZGap = 50. * Acts::UnitConstants::mm;
 };
 } // namespace eicrecon
