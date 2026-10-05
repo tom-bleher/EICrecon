@@ -10,8 +10,8 @@ namespace eicrecon {
 
 struct B0TripletSeedingConfig {
   /// A z gap between consecutive hits larger than this starts a new station. It
-  /// must exceed the z spread within a station (up to 12 mm) and stay below the
-  /// station spacing (at least 270 mm).
+  /// must exceed the z spread within a station (about 11 mm) and stay below the
+  /// station spacing (about 268 mm). The geometry test pins both margins.
   double stationGap = 50. * Acts::UnitConstants::mm;
   /// Maximum distance of the middle hit from the chord of the outer two,
   /// measured along the local magnetic field

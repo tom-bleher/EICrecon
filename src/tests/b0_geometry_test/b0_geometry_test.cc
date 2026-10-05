@@ -13,17 +13,22 @@
 #include <DD4hep/VolumeManager.h>
 #include <DDRec/CellIDPositionConverter.h>
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "algorithms/tracking/ActsGeometryProvider.h"
+#include "algorithms/tracking/B0TripletSeedingConfig.h"
+#include "algorithms/tracking/CKFTrackingConfig.h"
 
 namespace {
 void require(bool condition, const std::string& message) {
@@ -88,6 +93,7 @@ int main(int argc, char** argv) {
     const dd4hep::rec::CellIDPositionConverter converter(*detector);
     std::set<dd4hep::VolumeID> sensitiveIDs;
     std::set<const Acts::Layer*> layers;
+    std::vector<std::pair<const Acts::Layer*, double>> sensorLayers;
     constexpr double tolerance = 1.e-6 * Acts::UnitConstants::mm;
 
     auto checkElement = [&](auto&& self, dd4hep::DetElement element) -> void {
@@ -102,8 +108,9 @@ int main(int argc, char** argv) {
         require(layer != nullptr && layer->trackingVolume() != nullptr,
                 label + ": ACTS surface has no owning tracking volume");
         layers.insert(layer);
-        const auto* volume   = layer->trackingVolume();
-        const auto center    = surface->center(gctx);
+        const auto* volume = layer->trackingVolume();
+        const auto center  = surface->center(gctx);
+        sensorLayers.emplace_back(layer, center.z());
         const auto alignment = element.nominal();
         require((actsPosition(alignment.localToWorld(dd4hep::Position{})) - center).norm() <
                     tolerance,
@@ -146,6 +153,45 @@ int main(int argc, char** argv) {
     checkElement(checkElement, detector->detector("B0Tracker"));
     require(!sensitiveIDs.empty(), "B0Tracker has no sensitive sensors");
     require(expected == 0 || sensitiveIDs.size() == expected, "Unexpected B0 sensor count");
+
+    // The seeder groups hit positions and the CKF groups surface centers; both
+    // must agree with the physical stations. Faces pair into stations with
+    // the configured gap: within-station spread < gap < between-station gap.
+    const double zGap = eicrecon::CKFTrackingConfig{}.measurementGroupZGap;
+    require(eicrecon::B0TripletSeedingConfig{}.stationGap == zGap,
+            "seeder and CKF station gaps differ");
+    std::sort(sensorLayers.begin(), sensorLayers.end(),
+              [](const auto& a, const auto& b) { return a.second < b.second; });
+    std::vector<std::vector<std::pair<const Acts::Layer*, double>>> stations(1);
+    for (const auto& entry : sensorLayers) {
+      auto& current = stations.back();
+      if (!current.empty() && entry.second - current.back().second > zGap) {
+        stations.emplace_back();
+      }
+      stations.back().push_back(entry);
+    }
+    require(stations.size() == 4, "B0 sensors do not form four station groups");
+    double maxSpread = 0.;
+    double minGap    = std::numeric_limits<double>::max();
+    for (std::size_t s = 0; s < stations.size(); ++s) {
+      const auto& station = stations[s];
+      std::set<const Acts::Layer*> stationLayers;
+      for (const auto& [layer, z] : station) {
+        static_cast<void>(z);
+        stationLayers.insert(layer);
+      }
+      std::ostringstream label;
+      label << "B0 station " << s;
+      require(stationLayers.size() == 2, label.str() + ": expected a face pair");
+      const double spread = station.back().second - station.front().second;
+      require(spread < zGap, label.str() + ": within-station spread exceeds the gap");
+      maxSpread = std::max(maxSpread, spread);
+      if (s + 1 < stations.size()) {
+        const double gap = stations[s + 1].front().second - station.back().second;
+        require(gap > zGap, label.str() + ": between-station gap below the threshold");
+        minGap = std::min(minGap, gap);
+      }
+    }
 
     // Every B0 layer needs mapped material on at least one approach surface,
     // and no approach surface may retain prototype material (which proves the
@@ -190,8 +236,10 @@ int main(int argc, char** argv) {
     }
     std::cout << "Validated " << sensitiveIDs.size() << " B0 sensors in " << layers.size()
               << " layers: center/corner containment and pixel coordinate roundtrips; "
-              << concreteSurfaces << " of " << materialSurfaces
-              << " approach surfaces carry mapped material.\n";
+              << stations.size() << " stations (spread " << maxSpread / Acts::UnitConstants::mm
+              << " mm < " << zGap / Acts::UnitConstants::mm << " mm < "
+              << minGap / Acts::UnitConstants::mm << " mm gap); " << concreteSurfaces << " of "
+              << materialSurfaces << " approach surfaces carry mapped material.\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "B0 geometry validation failed: " << error.what() << '\n';
