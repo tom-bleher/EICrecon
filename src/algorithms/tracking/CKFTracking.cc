@@ -4,7 +4,6 @@
 #include "CKFTracking.h"
 
 #include <Acts/Definitions/Algebra.hpp>
-#include <Acts/Definitions/Direction.hpp>
 #include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #if Acts_VERSION_MAJOR >= 46
@@ -292,39 +291,15 @@ void CKFTracking::process(const Input& input, const Output& output) const {
 
   auto extrapolate = [&](auto& track) -> Acts::Result<void> {
     if (!m_cfg.extrapolateBackwardFromFirst) {
-      return Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+      // The reference perigee can lie beyond the tracking geometry. Continue
+      // through the field there, with material effects only where modeled.
+      BackwardExtrapolatorOptions backwardOptions(gctx, mctx);
+      return extrapolateBackwardToReference(track, *pSurface, extrapolator, backwardOptions,
+                                            acts_logger());
     }
-
-    // The straight-line intersection used by the Acts helper can lie downstream
-    // for a track bent by a dipole. A forward telescope needs upstream propagation.
-    auto firstMeasurement = Acts::findFirstMeasurementState(track);
-    if (!firstMeasurement.ok()) {
-      return firstMeasurement.error();
-    }
-    const auto parameters = track.createParametersFromState(*firstMeasurement);
-    // The reference perigee can lie beyond the tracking geometry. Continue
-    // through the field there, with material effects only where modeled.
-    BackwardExtrapolatorOptions backwardOptions(gctx, mctx);
-    backwardOptions.direction = Acts::Direction::Backward();
-    // ForcedSurfaceReached accepts arbitrarily negative intersections and can
-    // reverse the stepping direction towards a downstream perigee instead.
-#if Acts_VERSION_MAJOR >= 46
-    auto result = extrapolator.propagate<BackwardExtrapolatorOptions, Acts::SurfaceReached>(
-        parameters, *pSurface, backwardOptions);
-#else
-    auto result =
-        extrapolator.propagate<Acts::BoundTrackParameters, BackwardExtrapolatorOptions,
-                               Acts::SurfaceReached>(parameters, *pSurface, backwardOptions);
-#endif
-    if (!result.ok()) {
-      return result.error();
-    }
-    track.setReferenceSurface(pSurface);
-    track.parameters() = result->endParameters.value().parameters();
-    track.covariance() = result->endParameters.value().covariance().value();
-    return Acts::Result<void>::success();
+    return Acts::extrapolateTrackToReferenceSurface(
+        track, *pSurface, extrapolator, extrapolationOptions,
+        Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
   };
 
   // Create track container

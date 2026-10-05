@@ -21,6 +21,7 @@ add_executable(
   tracking_TrackSeeding.cc
   tracking_B0TripletSeeding.cc
   tracking_CKFMeasurementGroups.cc
+  tracking_CKFBackwardExtrapolation.cc
   pid_MergeTracks.cc
   particle_ChargedCandidateMaker.cc
   particle_flow_CaloRemnantCombiner.cc

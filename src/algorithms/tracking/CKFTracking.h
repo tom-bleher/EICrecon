@@ -3,14 +3,22 @@
 
 #pragma once
 
+#include <Acts/Definitions/Direction.hpp>
 #include <Acts/EventData/VectorMultiTrajectory.hpp>
 #include <Acts/EventData/VectorTrackContainer.hpp>
 #include <Acts/Geometry/TrackingGeometry.hpp>
 #include <Acts/MagneticField/MagneticFieldProvider.hpp>
+#include <Acts/Propagator/StandardAborters.hpp>
 #include <Acts/TrackFinding/CombinatorialKalmanFilter.hpp>
 #include <Acts/TrackFinding/MeasurementSelector.hpp>
 #include <Acts/Utilities/Logger.hpp>
 #include <Acts/Utilities/Result.hpp>
+#include <Acts/Utilities/TrackHelpers.hpp>
+#if Acts_VERSION_MAJOR >= 46
+#include <Acts/EventData/BoundTrackParameters.hpp>
+#else
+#include <Acts/EventData/TrackParameters.hpp>
+#endif
 #include <ActsExamples/EventData/Track.hpp>
 #include <algorithms/algorithm.h>
 #include <edm4eic/Measurement2DCollection.h>
@@ -73,6 +81,44 @@ public:
   /// Count longitudinal groups using only accepted measurement surfaces.
   static std::size_t countMeasurementGroups(const ActsExamples::TrackContainer::TrackProxy& track,
                                             const Acts::GeometryContext& gctx, double zGap);
+
+  /// Extrapolate a smoothed track upstream to a reference surface.
+  ///
+  /// Starts from the first measurement state and propagates explicitly
+  /// backward. Unlike Acts' firstOrLast strategy, the direction does not come
+  /// from a straight-line intersection, which misleads for dipole-bent
+  /// forward tracks. Uses ordinary SurfaceReached: ForcedSurfaceReached
+  /// accepts arbitrarily negative intersections and can reverse the stepping
+  /// direction towards a downstream perigee instead. Omit EndOfWorldReached
+  /// from the options when the reference can lie outside the tracking
+  /// geometry; material beyond the modeled geometry is then absent by
+  /// construction.
+  template <typename propagator_t, typename propagator_options_t>
+  static Acts::Result<void> extrapolateBackwardToReference(
+      ActsExamples::TrackContainer::TrackProxy& track, const Acts::Surface& referenceSurface,
+      const propagator_t& propagator, propagator_options_t options, const Acts::Logger& logger) {
+    auto firstMeasurement = Acts::findFirstMeasurementState(track);
+    if (!firstMeasurement.ok()) {
+      return firstMeasurement.error();
+    }
+    const auto parameters = track.createParametersFromState(*firstMeasurement);
+    options.direction     = Acts::Direction::Backward();
+#if Acts_VERSION_MAJOR >= 46
+    auto result = propagator.template propagate<propagator_options_t, Acts::SurfaceReached>(
+        parameters, referenceSurface, options);
+#else
+    auto result =
+        propagator.template propagate<Acts::BoundTrackParameters, propagator_options_t,
+                                      Acts::SurfaceReached>(parameters, referenceSurface, options);
+#endif
+    if (!result.ok()) {
+      return result.error();
+    }
+    track.setReferenceSurface(referenceSurface.getSharedPtr());
+    track.parameters() = result->endParameters.value().parameters();
+    track.covariance() = result->endParameters.value().covariance().value();
+    return Acts::Result<void>::success();
+  }
 
   void init() final;
   void process(const Input&, const Output&) const final;
