@@ -13,6 +13,11 @@ target_link_libraries(
           EDM4EIC::edm4eic
           EDM4HEP::edm4hep)
 
+# Add Acts version definitions to test executable
+target_compile_definitions(
+  b0_geometry_test PRIVATE "Acts_VERSION_MAJOR=${Acts_VERSION_MAJOR}"
+                           "Acts_VERSION_MINOR=${Acts_VERSION_MINOR}")
+
 install(TARGETS b0_geometry_test DESTINATION bin)
 
 # Without a compact file the test exits 77; CTest reports that as skipped

@@ -41,6 +41,16 @@ dd4hep::Position ddPosition(const Acts::Vector3& point) {
   constexpr double scale = dd4hep::mm / Acts::UnitConstants::mm;
   return {point.x() * scale, point.y() * scale, point.z() * scale};
 }
+
+bool volumeContains(const Acts::TrackingVolume& volume, const Acts::GeometryContext& gctx,
+                    const Acts::Vector3& point, double tolerance) {
+#if Acts_VERSION_MAJOR >= 45
+  return volume.inside(gctx, point, tolerance);
+#else
+  (void)gctx;
+  return volume.inside(point, tolerance);
+#endif
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -98,7 +108,7 @@ int main(int argc, char** argv) {
         require((actsPosition(alignment.localToWorld(dd4hep::Position{})) - center).norm() <
                     tolerance,
                 label + ": DD4hep and ACTS sensor centers disagree");
-        require(volume->inside(gctx, center, tolerance),
+        require(volumeContains(*volume, gctx, center, tolerance),
                 label + ": sensor center outside ACTS volume");
         const auto* bounds = dynamic_cast<const Acts::PlanarBounds*>(&surface->bounds());
         require(bounds != nullptr, label + ": expected planar B0 sensor bounds");
@@ -108,7 +118,7 @@ int main(int argc, char** argv) {
         vertices.push_back(Acts::Vector2::Zero());
         for (const auto& vertex : vertices) {
           const auto corner = surface->localToGlobal(gctx, vertex, normal);
-          require(volume->inside(gctx, corner, tolerance),
+          require(volumeContains(*volume, gctx, corner, tolerance),
                   label + ": sensor corner outside ACTS volume");
 
           // Sample inside every quadrant, avoiding edge pixels whose centers may

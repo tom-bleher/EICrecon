@@ -16,6 +16,7 @@ void addState(ActsExamples::TrackProxy& track, double z, bool outlier = false, b
   transform.translation().z() = z;
   auto state                  = track.appendTrackState(Acts::TrackStatePropMask::None);
   state.setReferenceSurface(Acts::Surface::makeShared<Acts::PlaneSurface>(transform));
+#if Acts_VERSION_MAJOR >= 45
   state.typeFlags().setIsMeasurement();
   if (outlier) {
     state.typeFlags().setIsOutlier();
@@ -23,6 +24,15 @@ void addState(ActsExamples::TrackProxy& track, double z, bool outlier = false, b
   if (hole) {
     state.typeFlags().setIsHole();
   }
+#else
+  state.typeFlags().set(Acts::TrackStateFlag::MeasurementFlag);
+  if (outlier) {
+    state.typeFlags().set(Acts::TrackStateFlag::OutlierFlag);
+  }
+  if (hole) {
+    state.typeFlags().set(Acts::TrackStateFlag::HoleFlag);
+  }
+#endif
 }
 } // namespace
 

@@ -11,6 +11,7 @@
 #include <Acts/EventData/BoundTrackParameters.hpp>
 #else
 #include <Acts/EventData/GenericBoundTrackParameters.hpp>
+#include <Acts/EventData/TrackParameters.hpp>
 #endif
 #include <Acts/EventData/MeasurementHelpers.hpp>
 #include <Acts/EventData/TrackStatePropMask.hpp>
@@ -309,8 +310,14 @@ void CKFTracking::process(const Input& input, const Output& output) const {
     backwardOptions.direction = Acts::Direction::Backward();
     // ForcedSurfaceReached accepts arbitrarily negative intersections and can
     // reverse the stepping direction towards a downstream perigee instead.
+#if Acts_VERSION_MAJOR >= 46
     auto result = extrapolator.propagate<BackwardExtrapolatorOptions, Acts::SurfaceReached>(
         parameters, *pSurface, backwardOptions);
+#else
+    auto result =
+        extrapolator.propagate<Acts::BoundTrackParameters, BackwardExtrapolatorOptions,
+                               Acts::SurfaceReached>(parameters, *pSurface, backwardOptions);
+#endif
     if (!result.ok()) {
       return result.error();
     }
