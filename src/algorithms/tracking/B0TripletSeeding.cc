@@ -46,6 +46,7 @@ namespace {
     double time;
     double variance;
     std::size_t index;
+    std::size_t rank;
   };
 
   /// A triplet of hits on three stations and the distance of its middle hit from the chord
@@ -61,6 +62,16 @@ namespace {
     Acts::BoundVector errors;
   };
 
+  struct SeedCandidate {
+    Candidate candidate;
+    Seed seed;
+  };
+
+  bool candidateLess(const Candidate& lhs, const Candidate& rhs) {
+    return std::tie(lhs.residual, lhs.points[0]->rank, lhs.points[1]->rank, lhs.points[2]->rank) <
+           std::tie(rhs.residual, rhs.points[0]->rank, rhs.points[1]->rank, rhs.points[2]->rank);
+  }
+
   /// Sorts the hits with a finite position and time by z and splits them into stations at gaps
   /// larger than stationGap
   std::vector<std::vector<Point>> groupStations(const edm4eic::TrackerHitCollection& hits,
@@ -69,21 +80,30 @@ namespace {
                                                 Acts::MagneticFieldProvider::Cache& fieldCache) {
     std::vector<std::size_t> order;
     for (std::size_t i = 0; i < hits.size(); ++i) {
-      const auto pos = hits[i].getPosition();
+      const auto pos        = hits[i].getPosition();
+      const auto cov        = hits[i].getPositionError();
+      const double variance = std::max({cov.xx, cov.yy, cov.zz});
       if (std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) &&
-          std::isfinite(hits[i].getTime())) {
+          std::isfinite(hits[i].getTime()) && std::isfinite(variance) && variance >= 0.) {
         order.push_back(i);
       }
     }
     auto sortKey = [&](std::size_t i) {
       const auto pos = hits[i].getPosition();
-      return std::tuple{pos.z, pos.x, pos.y, hits[i].getCellID()};
+      const auto cov = hits[i].getPositionError();
+      return std::tuple{pos.z,
+                        pos.x,
+                        pos.y,
+                        hits[i].getCellID(),
+                        hits[i].getTime(),
+                        std::max({cov.xx, cov.yy, cov.zz})};
     };
     std::ranges::sort(order, [&](std::size_t a, std::size_t b) { return sortKey(a) < sortKey(b); });
 
     std::vector<std::vector<Point>> stations;
     double lastZ = -std::numeric_limits<double>::infinity();
-    for (const auto i : order) {
+    for (std::size_t rank = 0; rank < order.size(); ++rank) {
+      const auto i   = order[rank];
       const auto pos = hits[i].getPosition();
       const Acts::Vector3 position{pos.x / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                    pos.y / edm4eic::unit::mm * Acts::UnitConstants::mm,
@@ -95,13 +115,13 @@ namespace {
       const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
                               (edm4eic::unit::mm * edm4eic::unit::mm) *
                               (Acts::UnitConstants::mm * Acts::UnitConstants::mm);
-      const auto hitField   = field.getField(position, fieldCache);
+      const auto hitField = field.getField(position, fieldCache);
       if (stations.empty() || position.z() - lastZ > stationGap) {
         stations.emplace_back();
       }
       lastZ = position.z();
       stations.back().push_back(
-          {position, hitField.ok() ? *hitField : Acts::Vector3::Zero(), time, variance, i});
+          {position, hitField.ok() ? *hitField : Acts::Vector3::Zero(), time, variance, i, rank});
     }
     return stations;
   }
@@ -213,12 +233,14 @@ namespace {
 
 } // namespace
 
-void B0TripletSeeding::init() {
+void B0TripletSeeding::init() { validateConfig(m_cfg); }
+
+void B0TripletSeeding::validateConfig(const B0TripletSeedingConfig& cfg) {
   // The negated conjunction also rejects NaN values
   // NOLINTNEXTLINE(readability-simplify-boolean-expr)
-  if (!(m_cfg.stationGap > 0. && m_cfg.maxResidual > 0. && m_cfg.minMomentum > 0. &&
-        m_cfg.anchorDistance >= 0. && m_cfg.maxSeeds > 0 && m_cfg.positionError > 0. &&
-        m_cfg.angleError > 0. && m_cfg.qOverPRelativeError > 0. && m_cfg.timeError > 0.)) {
+  if (!(cfg.stationGap > 0. && cfg.maxResidual > 0. && cfg.minMomentum > 0. &&
+        cfg.anchorDistance >= 0. && cfg.maxSeeds > 0 && cfg.positionError > 0. &&
+        cfg.angleError > 0. && cfg.qOverPRelativeError > 0. && cfg.timeError > 0.)) {
     throw std::runtime_error("B0TripletSeeding: configuration values must be positive "
                              "(anchorDistance may be zero)");
   }
@@ -228,22 +250,42 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   const auto [hits]                = input;
   auto [track_seeds, track_params] = output;
 
-  if (hits->empty()) {
-    return;
-  }
-
   const auto& gctx = m_geoSvc->getActsGeometryContext();
   const auto& mctx = m_geoSvc->getActsMagneticFieldContext();
   const auto field = m_geoSvc->getFieldProvider();
-  auto fieldCache  = field->makeCache(mctx);
+  seedHits(m_cfg, gctx, mctx, *field, *hits, *track_seeds, *track_params);
+  debug("{} hits, {} seeds", hits->size(), track_seeds->size());
+}
 
-  const auto stations = groupStations(*hits, m_cfg.stationGap, *field, fieldCache);
+void B0TripletSeeding::seedHits(const B0TripletSeedingConfig& cfg,
+                                const Acts::GeometryContext& gctx,
+                                const Acts::MagneticFieldContext& mctx,
+                                const Acts::MagneticFieldProvider& field,
+                                const edm4eic::TrackerHitCollection& hits,
+                                edm4eic::TrackSeedCollection& trackSeeds,
+                                edm4eic::TrackParametersCollection& trackParams) {
+  validateConfig(cfg);
+  if (hits.empty() || trackSeeds.size() >= cfg.maxSeeds) {
+    return;
+  }
+
+  auto fieldCache = field.makeCache(mctx);
+
+  const auto stations = groupStations(hits, cfg.stationGap, field, fieldCache);
 
   // Triplets of hits on three stations. In a uniform field the middle hit of a
   // forward track lies close to the chord of the outer two along the field. The
   // quadrupole component of the B0 magnet breaks this off its midplane, so a
   // soft track whose triplet skips a station can exceed maxResidual.
-  std::vector<Candidate> candidates;
+  // Keep only the best valid seeds. The heap's front is the worst retained
+  // candidate, allowing worse triplets to skip parameter estimation. Triplet
+  // enumeration is still cubic in station occupancy, but storage is bounded.
+  const auto limit = cfg.maxSeeds - trackSeeds.size();
+  std::vector<SeedCandidate> candidates;
+  candidates.reserve(limit);
+  const auto less = [](const SeedCandidate& lhs, const SeedCandidate& rhs) {
+    return candidateLess(lhs.candidate, rhs.candidate);
+  };
   for (std::size_t i = 0; i < stations.size(); ++i) {
     for (std::size_t j = i + 1; j < stations.size(); ++j) {
       for (std::size_t k = j + 1; k < stations.size(); ++k) {
@@ -254,8 +296,21 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
             }
             for (const auto& c : stations[k]) {
               const double residual = chordResidual(a, b, c);
-              if (residual < m_cfg.maxResidual) {
-                candidates.push_back({residual, {&a, &b, &c}});
+              if (!(residual < cfg.maxResidual)) {
+                continue;
+              }
+              const Candidate candidate{residual, {&a, &b, &c}};
+              if (candidates.size() == limit &&
+                  !candidateLess(candidate, candidates.front().candidate)) {
+                continue;
+              }
+              if (const auto seed = makeSeed(cfg, gctx, a, b, c)) {
+                if (candidates.size() == limit) {
+                  std::pop_heap(candidates.begin(), candidates.end(), less);
+                  candidates.pop_back();
+                }
+                candidates.push_back({candidate, *seed});
+                std::push_heap(candidates.begin(), candidates.end(), less);
               }
             }
           }
@@ -263,26 +318,10 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       }
     }
   }
-  // The hit indices make the order total, so the seeds do not depend on the order of the hits
-  std::ranges::sort(candidates, [](const Candidate& lhs, const Candidate& rhs) {
-    return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
-                    lhs.points[2]->index) <
-           std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
-  });
-
+  std::sort_heap(candidates.begin(), candidates.end(), less);
   for (const auto& candidate : candidates) {
-    if (track_seeds->size() >= m_cfg.maxSeeds) {
-      debug("Keeping {} of {} seed candidates", m_cfg.maxSeeds, candidates.size());
-      break;
-    }
-    const auto& [a, b, c] = candidate.points;
-    if (const auto seed = makeSeed(m_cfg, gctx, *a, *b, *c)) {
-      writeSeed(*seed, candidate, *hits, *track_seeds, *track_params);
-    }
+    writeSeed(candidate.seed, candidate.candidate, hits, trackSeeds, trackParams);
   }
-
-  debug("{} stations, {} triplet candidates, {} seeds", stations.size(), candidates.size(),
-        track_seeds->size());
 }
 
 } // namespace eicrecon

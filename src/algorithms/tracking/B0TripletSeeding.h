@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <Acts/Geometry/GeometryContext.hpp>
+#include <Acts/MagneticField/MagneticFieldContext.hpp>
+#include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <algorithms/algorithm.h>
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
@@ -38,6 +41,17 @@ public:
 
   void init() final;
   void process(const Input& input, const Output& output) const final;
+
+  /// Throw unless the configuration values are usable.
+  static void validateConfig(const B0TripletSeedingConfig& cfg);
+
+  /// Seed hits in a supplied field, independently of the detector service.
+  static void seedHits(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
+                       const Acts::MagneticFieldContext& mctx,
+                       const Acts::MagneticFieldProvider& field,
+                       const edm4eic::TrackerHitCollection& hits,
+                       edm4eic::TrackSeedCollection& trackSeeds,
+                       edm4eic::TrackParametersCollection& trackParams);
 
 private:
   const algorithms::ActsSvc& m_actsSvc{algorithms::ActsSvc::instance()};

@@ -20,7 +20,8 @@ struct B0TripletSeedingConfig {
   double minMomentum = 1. * Acts::UnitConstants::GeV;
   /// Distance upstream of the first hit at which the seed is expressed
   double anchorDistance = 10. * Acts::UnitConstants::mm;
-  /// Maximum number of seeds per event, smallest residual first
+  /// Maximum number of valid seeds retained per event, smallest residual first.
+  /// Bounds candidate storage; all station triplets are still enumerated.
   std::size_t maxSeeds = 1000;
 
   /// Prior uncertainties of the seed parameters
