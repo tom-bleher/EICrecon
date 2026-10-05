@@ -291,15 +291,15 @@ void CKFTracking::process(const Input& input, const Output& output) const {
 
   auto extrapolate = [&](auto& track) -> Acts::Result<void> {
     if (!m_cfg.extrapolateBackwardFromFirst) {
-      // The reference perigee can lie beyond the tracking geometry. Continue
-      // through the field there, with material effects only where modeled.
-      BackwardExtrapolatorOptions backwardOptions(gctx, mctx);
-      return extrapolateBackwardToReference(track, *pSurface, extrapolator, backwardOptions,
-                                            acts_logger());
+      return Acts::extrapolateTrackToReferenceSurface(
+          track, *pSurface, extrapolator, extrapolationOptions,
+          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
     }
-    return Acts::extrapolateTrackToReferenceSurface(
-        track, *pSurface, extrapolator, extrapolationOptions,
-        Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+    // The reference perigee can lie beyond the tracking geometry. Continue
+    // through the field there, with material effects only where modeled.
+    BackwardExtrapolatorOptions backwardOptions(gctx, mctx);
+    return extrapolateBackwardToReference(track, *pSurface, extrapolator, backwardOptions,
+                                          acts_logger());
   };
 
   // Create track container
