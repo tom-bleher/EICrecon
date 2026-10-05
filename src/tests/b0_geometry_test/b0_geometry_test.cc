@@ -30,6 +30,11 @@
 #include "algorithms/tracking/B0TripletSeedingConfig.h"
 #include "algorithms/tracking/CKFTrackingConfig.h"
 
+// Geometry/mapping consistency check for the B0 tracker (sensor surfaces,
+// station grouping, readout round trips, material-map coverage). This is not
+// a material-budget or end-to-end navigation validation. Without
+// B0_GEOMETRY_TEST_COMPACT the program exits 77 so plain `ctest` skips it;
+// the B0 validation workflow supplies all inputs and asserts pass/fail.
 namespace {
 void require(bool condition, const std::string& message) {
   if (!condition) {

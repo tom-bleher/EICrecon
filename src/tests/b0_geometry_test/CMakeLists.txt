@@ -1,7 +1,10 @@
 # Validates the B0 tracker DD4hep/ACTS geometry: every sensitive sensor needs
 # an ACTS surface inside its tracking volume, and readout cell IDs must
 # roundtrip through both DD4hep and ACTS. With a material map, every B0
-# approach surface must carry mapped (non-prototype) material.
+# layer must resolve mapped material: at least one concrete mapped approach
+# surface per layer and no leftover prototype material (individual
+# null-material approaches are allowed).
+# Scope: geometry/mapping consistency, not a material-budget validation.
 add_executable(b0_geometry_test b0_geometry_test.cc)
 
 target_link_libraries(

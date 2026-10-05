@@ -1,0 +1,152 @@
+name: B0 validation
+
+# Targeted validation for the B0 tracker reconstruction work: builds the B0
+# geometry/material fixture and the tracking unit tests against a pinned epic
+# geometry branch, then runs positive and negative controls.
+#
+# Scope: geometry/mapping consistency (sensor surfaces, station grouping,
+# material-map coverage). NOT a material-budget or end-to-end validation.
+#
+# NOTE: epic_ref defaults to the realistic-B0-geometry branch. After that
+# branch merges to epic main, flip the default to 'main'.
+
+on:
+  pull_request:
+    paths:
+      - 'src/algorithms/tracking/**'
+      - 'src/tests/b0_geometry_test/**'
+      - 'src/tests/algorithms_test/tracking_**'
+      - 'src/tests/CMakeLists.txt'
+      - '.github/workflows/b0-validation.yml'
+  workflow_dispatch:
+    inputs:
+      epic_ref:
+        description: 'epic ref (branch/tag/SHA) providing the B0 geometry'
+        default: 'b0_trackers_realistic_geometry'
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # inputs only exists for workflow_dispatch; PR runs use the default
+  epic_ref: ${{ inputs.epic_ref || 'b0_trackers_realistic_geometry' }}
+
+jobs:
+  b0-geometry:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        path: EICrecon
+        filter: "tree:0"
+    - name: Check out epic geometry
+      uses: actions/checkout@v7
+      with:
+        repository: eic/epic
+        ref: ${{ env.epic_ref }}
+        path: epic
+    - uses: cvmfs-contrib/github-action-cvmfs@v5
+    - name: Fetch material maps (fail fast on missing inputs)
+      run: |
+        set -euo pipefail
+        BRANCH_URL=$(grep -h "material-map" epic/compact/tracking/definitions_craterlake.xml | sed -n 's/.*url:\([^"]*\).*/\1/p')
+        test -n "$BRANCH_URL" || { echo "ERROR: no material-map pin in epic@${{ env.epic_ref }} compact/tracking/definitions_craterlake.xml"; exit 1; }
+        echo "branch-pinned map: $BRANCH_URL"
+        curl -sfL -o map_branch.cbor "$BRANCH_URL"
+        # Pre-fix pin (parent of the B0 map update a75e71c): the negative
+        # control below must FAIL the fixture with this map.
+        HIST_URL=https://raw.githubusercontent.com/eic/epic-data/700fa7f92568311408137b2002b513346b66277d/material-map.cbor
+        echo "pre-fix map: $HIST_URL"
+        curl -sfL -o map_prefix.cbor "$HIST_URL"
+        ls -l map_*.cbor
+    - name: Build epic geometry
+      uses: eic/run-cvmfs-osg-eic-shell@main
+      with:
+        organization: "eicweb"
+        platform-release: "eic_xl:nightly"
+        run: |
+          cmake -S epic -B epic/build -DCMAKE_INSTALL_PREFIX="$PWD/epic-install" -DCMAKE_BUILD_TYPE=Release
+          cmake --build epic/build -j "$(getconf _NPROCESSORS_ONLN)"
+          cmake --install epic/build
+          test -x epic-install/bin/thisepic.sh || { echo "ERROR: thisepic.sh missing"; exit 1; }
+          test -f epic-install/share/epic/epic_craterlake.xml || { echo "ERROR: craterlake compact missing"; exit 1; }
+          test -f epic-install/share/epic/epic_ip6_extended.xml || { echo "ERROR: ip6_extended compact missing"; exit 1; }
+    - name: Build EICrecon B0 tests
+      uses: eic/run-cvmfs-osg-eic-shell@main
+      with:
+        organization: "eicweb"
+        platform-release: "eic_xl:nightly"
+        run: |
+          cmake --warn-uninitialized -S EICrecon -B EICrecon/build -DCMAKE_INSTALL_PREFIX="$PWD/EICrecon-install" -DCMAKE_BUILD_TYPE=Release
+          cmake --build EICrecon/build -j "$(getconf _NPROCESSORS_ONLN)" --target b0_geometry_test algorithms_test
+    - name: Geometry positive and negative controls
+      uses: eic/run-cvmfs-osg-eic-shell@main
+      with:
+        organization: "eicweb"
+        platform-release: "eic_xl:nightly"
+        run: |
+          set -euo pipefail
+          BIN=EICrecon/build/src/tests/b0_geometry_test/b0_geometry_test
+          test -x "$BIN" || { echo "ERROR: $BIN not built"; exit 1; }
+          test -f map_branch.cbor || { echo "ERROR: map_branch.cbor missing"; exit 1; }
+          test -f map_prefix.cbor || { echo "ERROR: map_prefix.cbor missing"; exit 1; }
+          source epic-install/bin/thisepic.sh epic_craterlake >/dev/null
+          CRATERLAKE="$DETECTOR_PATH/$DETECTOR_CONFIG.xml"
+          source epic-install/bin/thisepic.sh epic_ip6_extended >/dev/null
+          IP6EXT="$DETECTOR_PATH/$DETECTOR_CONFIG.xml"
+          test -f "$CRATERLAKE" || { echo "ERROR: $CRATERLAKE missing"; exit 1; }
+          test -f "$IP6EXT" || { echo "ERROR: $IP6EXT missing"; exit 1; }
+          {
+            echo "epic_ref=${{ env.epic_ref }} sha=$(git -C epic rev-parse HEAD)"
+            echo "branch_map=$(grep -h material-map epic/compact/tracking/definitions_craterlake.xml | sed -n 's/.*url:\([^"]*\).*/\1/p')"
+            echo "prefix_map=https://raw.githubusercontent.com/eic/epic-data/700fa7f92568311408137b2002b513346b66277d/material-map.cbor"
+            cat /etc/jug_info 2>/dev/null || true
+          } | tee evidence.txt
+          echo "=== 1. positive: craterlake + branch-pinned map (must PASS) ==="
+          B0_GEOMETRY_TEST_COMPACT="$CRATERLAKE" B0_GEOMETRY_TEST_EXPECTED=516 B0_GEOMETRY_TEST_MATERIAL="$PWD/map_branch.cbor" "$BIN" 2>&1 | tee positive.log
+          echo "=== 2. negative: ip6_extended + pre-fix map (must FAIL on prototype) ==="
+          set +e
+          B0_GEOMETRY_TEST_COMPACT="$IP6EXT" B0_GEOMETRY_TEST_EXPECTED=516 B0_GEOMETRY_TEST_MATERIAL="$PWD/map_prefix.cbor" "$BIN" > negative_proto.log 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0 || { echo "ERROR: negative control unexpectedly PASSED"; exit 1; }
+          grep -q "prototype" negative_proto.log || { echo "ERROR: negative failed without the prototype signature:"; tail -5 negative_proto.log; exit 1; }
+          echo "negative control failed as expected (exit $code, prototype signature present)"
+          echo "=== 3. tight negative: craterlake + pre-fix map (must FAIL) ==="
+          set +e
+          B0_GEOMETRY_TEST_COMPACT="$CRATERLAKE" B0_GEOMETRY_TEST_EXPECTED=516 B0_GEOMETRY_TEST_MATERIAL="$PWD/map_prefix.cbor" "$BIN" > negative_samegeo.log 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0 || { echo "ERROR: same-geometry negative unexpectedly PASSED"; exit 1; }
+          echo "same-geometry negative failed as expected (exit $code)"
+          echo "=== 4. skip contract: unconfigured run (must exit 77) ==="
+          set +e
+          "$BIN" > skip.log 2>&1
+          code=$?
+          set -e
+          test "$code" -eq 77 || { echo "ERROR: unconfigured run exited $code, expected 77"; exit 1; }
+          echo "skip contract holds (exit 77)"
+    - name: B0 unit tests
+      uses: eic/run-cvmfs-osg-eic-shell@main
+      with:
+        organization: "eicweb"
+        platform-release: "eic_xl:nightly"
+        run: |
+          ctest --test-dir EICrecon/build -R 't_algorithms_test|t_b0_geometry_test' --output-on-failure
+    - name: Upload B0 evidence
+      uses: actions/upload-artifact@v7
+      with:
+        name: b0-validation-evidence
+        path: |
+          evidence.txt
+          positive.log
+          negative_proto.log
+          negative_samegeo.log
+          skip.log
+        if-no-files-found: error

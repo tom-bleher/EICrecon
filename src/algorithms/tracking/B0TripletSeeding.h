@@ -62,6 +62,9 @@ public:
 
   /// Seed hits in a supplied field, independently of the detector service.
   /// Returns diagnostics counters; appends at most maxSeeds seeds.
+  /// Candidates enter the retained set only after successful parameter
+  /// estimation, so failed estimates never consume the cap (pre-existing
+  /// behavior, preserved by the bounded heap).
   static Stats seedHits(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
                         const Acts::MagneticFieldContext& mctx,
                         const Acts::MagneticFieldProvider& field,
