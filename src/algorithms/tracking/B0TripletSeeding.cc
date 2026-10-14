@@ -36,36 +36,13 @@
 
 #include "ActsGeometryProvider.h"
 #include "B0TripletSeedingConfig.h"
+#include "B0TripletSeedingHelpers.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 
 namespace eicrecon {
 
-namespace {
+namespace b0_triplet_seeding {
 
-  /// A hit in Acts units, with the magnetic field at its position (zero if the lookup failed)
-  struct Point {
-    Acts::Vector3 position;
-    Acts::Vector3 field;
-    double time;
-    double variance;
-    std::size_t index;
-  };
-
-  /// A triplet of hits on three stations and the distance of its middle hit from the chord
-  struct Candidate {
-    double residual;
-    std::array<const Point*, 3> points;
-  };
-
-  /// Seed parameters of a triplet and their diagonal prior, on a perigee surface at the anchor
-  struct Seed {
-    Acts::Vector3 anchor;
-    Acts::BoundVector parameters;
-    Acts::BoundVector errors;
-  };
-
-  /// Sorts the hits with a finite position and time by z and splits them into stations at gaps
-  /// larger than stationGap
   std::vector<std::vector<Point>> groupStations(const edm4eic::TrackerHitCollection& hits,
                                                 double stationGap,
                                                 const Acts::MagneticFieldProvider& field,
@@ -109,15 +86,12 @@ namespace {
     return stations;
   }
 
-  /// Distance of the middle hit from the chord of the outer two, along the field at the middle hit
   double chordResidual(const Point& a, const Point& b, const Point& c) {
     const Acts::Vector3 chord = c.position - a.position;
     const double fraction     = (b.position.z() - a.position.z()) / chord.z();
     return std::abs((b.position - a.position - fraction * chord).dot(b.field.normalized()));
   }
 
-  /// Seed parameters of a triplet in the field at its middle hit, if the triplet passes the
-  /// momentum limit and its prior is positive definite
   std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
                                const Point& a, const Point& b, const Point& c) {
     const Acts::Vector3& bField = b.field;
@@ -175,7 +149,6 @@ namespace {
     return Seed{.anchor = anchor, .parameters = *local, .errors = errors};
   }
 
-  /// Writes a seed and its parameters, converted to EDM4eic units
   void writeSeed(const Seed& seed, const Candidate& candidate,
                  const edm4eic::TrackerHitCollection& hits,
                  edm4eic::TrackSeedCollection& trackSeeds,
@@ -214,7 +187,7 @@ namespace {
     }
   }
 
-} // namespace
+} // namespace b0_triplet_seeding
 
 void B0TripletSeeding::init() {
   struct Named {
@@ -250,6 +223,8 @@ void B0TripletSeeding::init() {
 }
 
 void B0TripletSeeding::process(const Input& input, const Output& output) const {
+  using namespace b0_triplet_seeding;
+
   const auto [hits]                = input;
   auto [track_seeds, track_params] = output;
 
