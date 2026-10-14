@@ -301,7 +301,75 @@ flowchart TB
 ```
 
 ## Full diagram for B0 track reconstruction
-In progress...
+
+The B0 tracker is a telescope of four stations inside the B0 magnet, so it has its own seeding.
+`B0TripletSeeding` groups the B0 hits into stations by z and forms triplets of hits on three
+stations. It keeps a triplet if its middle hit lies within `maxResidual` of the chord of the outer
+two, measured along the local magnetic field, and estimates the track parameters from the three
+hits without assuming a vertex or a charge. Each seed is expressed on a perigee just upstream of
+its first hit, where the track finding starts. A track crossing all stations gives one seed per
+station triple. All of them are kept: the track finding does not succeed from every seed, and the
+ambiguity solver keeps the best of the resulting tracks. The hit-seeded tracks need three
+measurements. They are combined with the central tracks for the reconstructed particles and the
+central and B0 vertices. A truth-seeded chain runs alongside for comparison.
+
+```mermaid
+flowchart TB
+  classDef alg fill:#f96;
+  classDef col fill:#66ccff;
+  subgraph Hit digitization
+    B0TrackerHits(<strong>B0 tracker</strong>:<br/>B0TrackerHits):::col
+    B0TrackerHits --> B0TrackerDigi[SiliconTrackerDigi]:::alg
+    B0TrackerDigi --> B0TrackerRawHits:::col
+    B0TrackerRawHits --> B0TrackerHitReconstruction[TrackerHitReconstruction]:::alg
+    B0TrackerHitReconstruction --> B0TrackerRecHits:::col
+  end
+
+  subgraph Track finding & fitting
+    B0TrackerRecHits --> B0TrackerHitsConverter[TrackerMeasurementFromHits]:::alg
+    B0TrackerHitsConverter --> B0TrackerMeasurements:::col
+
+    B0TrackerRecHits --> B0TripletSeeding:::alg
+    B0TripletSeeding --> B0TrackerSeeds:::col
+    B0TripletSeeding --> B0TrackerSeedParameters:::col
+
+    B0CKFTracking[CKFTracking]:::alg
+    B0TrackerSeeds --> B0CKFTracking
+    B0TrackerMeasurements --> B0CKFTracking
+    B0CKFTracking --> B0TrackerCKFActsTracksUnfiltered:::col
+
+    B0AmbiguitySolver[AmbiguitySolver]:::alg
+    B0TrackerCKFActsTracksUnfiltered --> B0AmbiguitySolver
+    B0AmbiguitySolver --> B0TrackerCKFActsTracks:::col
+
+    B0ActsToTracks[ActsToTracks]:::alg
+    B0TrackerCKFActsTracks --> B0ActsToTracks
+    B0ActsToTracks --> B0TrackerCKFTracks:::col
+    B0ActsToTracks --> B0TrackerCKFTrajectories:::col
+    B0ActsToTracks --> B0TrackerCKFTrackParameters:::col
+    B0ActsToTracks --> B0TrackerCKFTrackAssociations:::col
+
+    B0TrackerTruthSeeds:::col --> B0TruthSeededChain[CKFTracking, AmbiguitySolver, ActsToTracks]:::alg
+    B0TrackerMeasurements --> B0TruthSeededChain
+    B0TruthSeededChain --> B0TrackerCKFTruthSeededTracks:::col
+  end
+
+  subgraph Combination with the central tracks
+    CombinedTracksCollector[CollectionCollector]:::alg
+    CentralCKFTracks:::col --> CombinedTracksCollector
+    B0TrackerCKFTracks --> CombinedTracksCollector
+    CombinedTracksCollector --> CombinedTracks:::col
+    CombinedTracks --> TracksToParticles:::alg
+    TracksToParticles --> ReconstructedChargedWithoutPIDParticles:::col
+
+    ActsTrackMerger:::alg
+    CentralCKFActsTracks:::col --> ActsTrackMerger
+    B0TrackerCKFActsTracks --> ActsTrackMerger
+    ActsTrackMerger --> CentralAndB0TrackerCKFActsTracks:::col
+    CentralAndB0TrackerCKFActsTracks --> B0IterativeVertexFinder[IterativeVertexFinder]:::alg
+    B0IterativeVertexFinder --> CentralAndB0TrackVertices:::col
+  end
+```
 
 ## Description of collections
 - MCParticles ([edm4hep::MCParticle](https://github.com/key4hep/EDM4hep/blob/v00-99-02/edm4hep.yaml#L230-L258)) -- Monte Carlo particle
