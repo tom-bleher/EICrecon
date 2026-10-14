@@ -263,6 +263,9 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
       }
     }
   }
+  // A track crossing all stations gives one candidate per station triple, and all of them are kept.
+  // The track finding does not succeed from every seed of a track, so keeping only the best one
+  // per track loses tracks; the ambiguity solver removes the duplicate tracks instead.
   // The hit indices make the order total, so the seeds do not depend on the order of the hits
   std::ranges::sort(candidates, [](const Candidate& lhs, const Candidate& rhs) {
     return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
