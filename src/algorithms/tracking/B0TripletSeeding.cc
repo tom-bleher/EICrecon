@@ -18,6 +18,7 @@
 #include <edm4eic/unit_system.h>
 #include <edm4hep/Vector2f.h>
 #include <edm4hep/Vector3f.h>
+#include <fmt/format.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <algorithm>
@@ -28,6 +29,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -215,13 +217,35 @@ namespace {
 } // namespace
 
 void B0TripletSeeding::init() {
-  // The negated conjunction also rejects NaN values
-  // NOLINTNEXTLINE(readability-simplify-boolean-expr)
-  if (!(m_cfg.stationGap > 0. && m_cfg.maxResidual > 0. && m_cfg.minMomentum > 0. &&
-        m_cfg.anchorDistance >= 0. && m_cfg.maxSeeds > 0 && m_cfg.positionError > 0. &&
-        m_cfg.angleError > 0. && m_cfg.qOverPRelativeError > 0. && m_cfg.timeError > 0.)) {
-    throw std::runtime_error("B0TripletSeeding: configuration values must be positive "
-                             "(anchorDistance may be zero)");
+  struct Named {
+    std::string_view name;
+    double value;
+  };
+  // The comparisons are written so that NaN values fail them too
+  const std::array<Named, 7> positive{{
+      {"stationGap", m_cfg.stationGap},
+      {"maxResidual", m_cfg.maxResidual},
+      {"minMomentum", m_cfg.minMomentum},
+      {"positionError", m_cfg.positionError},
+      {"angleError", m_cfg.angleError},
+      {"qOverPRelativeError", m_cfg.qOverPRelativeError},
+      {"timeError", m_cfg.timeError},
+  }};
+  for (const auto& [name, value] : positive) {
+    if (!(value > 0.)) {
+      throw std::runtime_error(
+          fmt::format("B0TripletSeeding: {} must be positive, got {}", name, value));
+    }
+  }
+  if (!(m_cfg.anchorDistance >= 0.)) {
+    throw std::runtime_error(fmt::format(
+        "B0TripletSeeding: anchorDistance must not be negative, got {}", m_cfg.anchorDistance));
+  }
+  if (m_cfg.maxSeeds == 0) {
+    throw std::runtime_error("B0TripletSeeding: maxSeeds must be positive");
+  }
+  if (!m_geoSvc || !m_geoSvc->getFieldProvider()) {
+    throw std::runtime_error("B0TripletSeeding: no magnetic field provider");
   }
 }
 
