@@ -27,9 +27,9 @@ struct B0TripletSeedingConfig {
 
   /// Prior uncertainties of the seed parameters. The prior is a deliberately loose diagonal
   /// envelope, not an error estimate: the track finder refits from it, so it only has to cover
-  /// the true error. The relative q/p error is a floor that dominates for most seeds, and the
-  /// angle error has no multiple scattering term, so it is too tight for tracks below about
-  /// 5 GeV. Seeds built from other particles or from stray hits can have the wrong charge.
+  /// the true error. The relative q/p error is a floor that dominates for most seeds. Widening
+  /// the angle error to 10 or 30 mrad did not change the efficiency for 2-15 GeV pions. Seeds
+  /// built from other particles or from stray hits can have the wrong charge.
   double positionError       = 0.1 * Acts::UnitConstants::mm;
   double angleError          = 2. * Acts::UnitConstants::mrad;
   double qOverPRelativeError = 0.25;
