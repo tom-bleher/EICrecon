@@ -307,7 +307,9 @@ The B0 tracker is a telescope of four stations inside the B0 magnet, so it has i
 stations. It keeps a triplet if its middle hit lies within `maxResidual` of the chord of the outer
 two, measured along the local magnetic field, and estimates the track parameters from the three
 hits without assuming a vertex or a charge. Each seed is expressed on a perigee just upstream of
-its first hit, where the track finding starts. A track crossing all stations gives one seed per
+its first hit, where the track finding starts and where the parameters of the finished track are
+reported: extrapolating a B0 track back to the origin fails for most negative tracks, and the
+track would be lost. A track crossing all stations gives one seed per
 station triple. All of them are kept: the track finding does not succeed from every seed, and the
 ambiguity solver keeps the best of the resulting tracks. The hit-seeded tracks need three
 measurements. They are combined with the central tracks for the reconstructed particles and the

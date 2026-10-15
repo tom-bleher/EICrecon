@@ -305,10 +305,12 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       ++i;
     }
 
-    // Construct the perigee surface at the seed's reference point.
-    // For IP-originating tracks this is (0,0,0); for displaced seeds (e.g. from
-    // Lambda decay daughters) the seed carries the actual decay-vertex position
-    // so the CKF propagates from there instead of from the IP.
+    // Construct the perigee surface at the seed's reference point. The track
+    // finding starts there and the finished track is extrapolated back to it,
+    // so the track parameters are reported on the same surface as the seed.
+    // Seeds from the interaction point put it at the origin; seeds anchored
+    // elsewhere (displaced decays, far-forward detectors) keep their own frame,
+    // where the extrapolation is short and does not fail for bent tracks.
     const auto& perigee_pos = track_seed.getPerigee();
     auto pSurface           = Acts::Surface::makeShared<const Acts::PerigeeSurface>(Acts::Vector3(
         perigee_pos.x * Acts::UnitConstants::mm, perigee_pos.y * Acts::UnitConstants::mm,
@@ -317,9 +319,6 @@ void CKFTracking::process(const Input& input, const Output& output) const {
     // Create parameters
     acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
   }
-
-  //// Construct a perigee surface as the target surface
-  auto pSurface = Acts::Surface::makeShared<Acts::PerigeeSurface>(Acts::Vector3{0., 0., 0.});
 
   // Convert algorithm log level to Acts log level for local logger
   const auto spdlog_level = static_cast<spdlog::level::level_enum>(this->level());
@@ -428,8 +427,8 @@ void CKFTracking::process(const Input& input, const Output& output) const {
       }
 
       auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+          track, acts_init_trk_params.at(iseed).referenceSurface(), extrapolator,
+          extrapolationOptions, Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
 
       if (!extrapolationResult.ok()) {
         debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
