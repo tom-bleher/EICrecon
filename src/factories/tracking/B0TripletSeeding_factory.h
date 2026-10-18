@@ -39,6 +39,10 @@ private:
   ParameterRef<double> m_maxResidual{
       this, "maxResidual", config().maxResidual,
       "max distance of the middle hit from the chord along the magnetic field, in Acts units (mm)"};
+  ParameterRef<double> m_maxTimeResidual{this, "maxTimeResidual", config().maxTimeResidual,
+                                         "max deviation of the hit time differences from the "
+                                         "flight time at the speed of light, in ns; "
+                                         "0 turns the check off"};
   ParameterRef<double> m_minMomentum{this, "minMomentum", config().minMomentum,
                                      "min momentum of the seed, in Acts units (GeV)"};
   ParameterRef<double> m_anchorDistance{

@@ -123,16 +123,29 @@ namespace b0_triplet_seeding {
     // forward track lies close to the chord of the outer two along the field. The
     // quadrupole component of the B0 magnet breaks this off its midplane, so a
     // soft track whose triplet skips a station can exceed maxResidual.
+    // Hits of one track are separated in time by their flight time, in Acts units (c = 1) the
+    // distance between them. Checking the first hit against the middle one before the loop over
+    // the last hit rejects out-of-time hits cheaply.
+    const double maxTimeResidual =
+        cfg.maxTimeResidual / edm4eic::unit::ns * Acts::UnitConstants::ns;
+    auto inTime = [&](const Point& first, const Point& later) {
+      return maxTimeResidual <= 0. ||
+             std::abs(later.time - first.time - (later.position - first.position).norm()) <
+                 maxTimeResidual;
+    };
     std::vector<Candidate> candidates;
     for (std::size_t i = 0; i < stations.size(); ++i) {
       for (std::size_t j = i + 1; j < stations.size(); ++j) {
         for (std::size_t k = j + 1; k < stations.size(); ++k) {
           for (const auto& a : stations[i]) {
             for (const auto& b : stations[j]) {
-              if (b.fieldDirection.isZero()) {
+              if (b.fieldDirection.isZero() || !inTime(a, b)) {
                 continue;
               }
               for (const auto& c : stations[k]) {
+                if (!inTime(a, c)) {
+                  continue;
+                }
                 const double residual = chordResidual(a, b, c);
                 if (residual < cfg.maxResidual) {
                   candidates.push_back({residual, {&a, &b, &c}});
@@ -289,6 +302,10 @@ void B0TripletSeeding::init() {
       throw std::runtime_error(
           fmt::format("B0TripletSeeding: {} must be positive, got {}", name, value));
     }
+  }
+  if (!(m_cfg.maxTimeResidual >= 0.)) {
+    throw std::runtime_error(fmt::format(
+        "B0TripletSeeding: maxTimeResidual must not be negative, got {}", m_cfg.maxTimeResidual));
   }
   if (!(m_cfg.anchorDistance >= 0.)) {
     throw std::runtime_error(fmt::format(
