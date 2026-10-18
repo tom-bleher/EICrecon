@@ -50,6 +50,9 @@ private:
       "distance upstream of the first hit at which seeds are expressed, in Acts units (mm)"};
   ParameterRef<std::size_t> m_maxSeeds{this, "maxSeeds", config().maxSeeds,
                                        "max number of seeds per event"};
+  ParameterRef<bool> m_dropSeedsWithUsedHits{
+      this, "dropSeedsWithUsedHits", config().dropSeedsWithUsedHits,
+      "skip a candidate whose hits all belong to better-ranked seeds"};
   ParameterRef<double> m_positionError{this, "positionError", config().positionError,
                                        "error on the seed position, in Acts units (mm)"};
   ParameterRef<double> m_angleError{this, "angleError", config().angleError,

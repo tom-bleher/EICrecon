@@ -31,6 +31,11 @@ struct B0TripletSeedingConfig {
   /// 8th, ... time it happens.
   std::size_t maxSeeds = 1000;
 
+  /// Skip a candidate whose three hits all belong to better-ranked seeds. A track on four stations
+  /// then gives two seeds instead of four. Off by default: the track finding does not succeed from
+  /// every seed of a track, and keeping only one seed per track cost efficiency (dd47ba24).
+  bool dropSeedsWithUsedHits = false;
+
   /// Prior uncertainties of the seed parameters. The prior is a deliberately loose diagonal
   /// envelope, not an error estimate: the track finder refits from it, so it only has to cover
   /// the true error. The relative q/p error is a floor that dominates for most seeds. Widening
