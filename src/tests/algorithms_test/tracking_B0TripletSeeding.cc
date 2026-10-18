@@ -340,3 +340,32 @@ TEST_CASE("B0TripletSeeding rejects hits out of time", "[B0TripletSeeding]") {
     CHECK(findCandidates(off, shifted).size() == 1);
   }
 }
+
+TEST_CASE("B0TripletSeeding can skip candidates whose hits are all used", "[B0TripletSeeding]") {
+  // One hit per station; every station triple of a four-station track is a candidate
+  std::vector<Point> points;
+  for (std::size_t i = 0; i < kStationZ.size(); ++i) {
+    points.push_back(point({0., 0., kStationZ[i]}, i));
+  }
+  auto triplet = [&](double residual, std::size_t i, std::size_t j, std::size_t k) {
+    return Candidate{.residual = residual, .points = {&points[i], &points[j], &points[k]}};
+  };
+  const std::vector<Candidate> all{triplet(0.1, 0, 1, 2), triplet(0.2, 0, 1, 3),
+                                   triplet(0.3, 0, 2, 3), triplet(0.4, 1, 2, 3)};
+  auto made = [&](B0TripletSeedingConfig cfg) {
+    auto candidates = all;
+    std::vector<double> residuals;
+    selectSeeds(cfg, candidates, [&](const Candidate& c) {
+      residuals.push_back(c.residual);
+      return true;
+    });
+    return residuals;
+  };
+
+  B0TripletSeedingConfig cfg;
+  // By default all of them are kept
+  CHECK(made(cfg) == std::vector<double>{0.1, 0.2, 0.3, 0.4});
+  // Otherwise the last two only reuse hits of the first two
+  cfg.dropSeedsWithUsedHits = true;
+  CHECK(made(cfg) == std::vector<double>{0.1, 0.2});
+}

@@ -173,13 +173,27 @@ namespace b0_triplet_seeding {
       return ranksBefore(rhs, lhs);
     };
     std::ranges::make_heap(candidates, ranksAfter);
+    // Hits of the seeds made so far, by hit index
+    std::vector<bool> used;
+    auto isUsed = [&](const Point* point) {
+      return point->index < used.size() && used[point->index];
+    };
     auto end          = candidates.end();
     std::size_t seeds = 0;
     while (end != candidates.begin() && seeds < cfg.maxSeeds) {
       std::ranges::pop_heap(candidates.begin(), end, ranksAfter);
       --end;
+      if (cfg.dropSeedsWithUsedHits && std::ranges::all_of(end->points, isUsed)) {
+        continue;
+      }
       if (makeSeed(*end)) {
         ++seeds;
+        if (cfg.dropSeedsWithUsedHits) {
+          for (const auto* point : end->points) {
+            used.resize(std::max(used.size(), point->index + 1));
+            used[point->index] = true;
+          }
+        }
       }
     }
     return static_cast<std::size_t>(std::distance(candidates.begin(), end));

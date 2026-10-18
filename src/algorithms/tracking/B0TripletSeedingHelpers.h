@@ -68,7 +68,8 @@ std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
 
 /// Passes the candidates to makeSeed in order of increasing residual, ties broken by the hit
 /// indices, until makeSeed has returned true maxSeeds times. Only the candidates that are reached
-/// are ordered. Returns the number of candidates that were not reached.
+/// are ordered. With dropSeedsWithUsedHits, a candidate whose hits all belong to seeds already made
+/// is skipped. Returns the number of candidates that were not reached.
 std::size_t selectSeeds(const B0TripletSeedingConfig& cfg, std::vector<Candidate>& candidates,
                         const std::function<bool(const Candidate&)>& makeSeed);
 
