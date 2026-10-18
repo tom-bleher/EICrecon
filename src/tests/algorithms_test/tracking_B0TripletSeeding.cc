@@ -224,9 +224,40 @@ TEST_CASE("B0TripletSeeding writes seeds in EDM4eic units", "[B0TripletSeeding]"
   CHECK(params[0].getQOverP() == Catch::Approx(1. / 20.).epsilon(0.01));
   // The time prior of 10 ns is stored as a variance in ns^2
   CHECK(params[0].getCovariance()(5, 5) == Catch::Approx(100.).epsilon(1e-4));
+
+  // Every parameter and its variance is converted from Acts to EDM4eic units
+  const auto& par = seed->parameters;
+  const auto& err = seed->errors;
+  CHECK(params[0].getType() == -1);
+  CHECK(params[0].getLoc().a ==
+        Catch::Approx(par[Acts::eBoundLoc0] / Acts::UnitConstants::mm * edm4eic::unit::mm)
+            .margin(1e-5));
+  CHECK(params[0].getLoc().b ==
+        Catch::Approx(par[Acts::eBoundLoc1] / Acts::UnitConstants::mm * edm4eic::unit::mm)
+            .margin(1e-3));
+  CHECK(params[0].getPhi() == Catch::Approx(par[Acts::eBoundPhi]).epsilon(1e-6));
+  CHECK(params[0].getTheta() == Catch::Approx(par[Acts::eBoundTheta]).epsilon(1e-6));
+  CHECK(params[0].getTime() ==
+        Catch::Approx(par[Acts::eBoundTime] / Acts::UnitConstants::ns * edm4eic::unit::ns)
+            .epsilon(1e-6));
+  const auto cov = params[0].getCovariance();
+  CHECK(cov(0, 0) == Catch::Approx(err[Acts::eBoundLoc0] * err[Acts::eBoundLoc0]).epsilon(1e-5));
+  CHECK(cov(1, 1) == Catch::Approx(err[Acts::eBoundLoc1] * err[Acts::eBoundLoc1]).epsilon(1e-5));
+  CHECK(cov(2, 2) == Catch::Approx(err[Acts::eBoundPhi] * err[Acts::eBoundPhi]).epsilon(1e-5));
+  CHECK(cov(3, 3) == Catch::Approx(err[Acts::eBoundTheta] * err[Acts::eBoundTheta]).epsilon(1e-5));
+  const double qOverPError = err[Acts::eBoundQOverP] * Acts::UnitConstants::GeV;
+  CHECK(cov(4, 4) == Catch::Approx(qOverPError * qOverPError).epsilon(1e-5));
+  // The prior is diagonal
+  CHECK(cov(0, 1) == 0.f);
+  CHECK(cov(4, 5) == 0.f);
+  // The seed refers to its parameters and its hits
+  CHECK(seeds[0].getParams().getObjectID() == params[0].getObjectID());
+  for (std::size_t i = 0; i < 3; ++i) {
+    CHECK(seeds[0].getHits()[i].getObjectID() == hits[i].getObjectID());
+  }
 }
 
-// A valid configuration cannot be tested here: the test fixture's ActsGeometryProvider has no
+// A valid configuration cannot pass init() here: the test fixture's ActsGeometryProvider has no
 // magnetic field, which init() requires
 TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeeding]") {
   B0TripletSeeding algo("B0TripletSeedingTest");
@@ -244,6 +275,25 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   cfg.maxTimeResidual = -1.;
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("maxTimeResidual"));
+
+  cfg                = B0TripletSeedingConfig{};
+  cfg.anchorDistance = -1.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("anchorDistance"));
+
+  cfg          = B0TripletSeedingConfig{};
+  cfg.maxSeeds = 0;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("maxSeeds"));
+
+  cfg           = B0TripletSeedingConfig{};
+  cfg.timeError = 0.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("timeError"));
+
+  // A valid configuration passes the checks and only fails for the missing field
+  algo.applyConfig(B0TripletSeedingConfig{});
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("magnetic field"));
 }
 
 TEST_CASE("B0TripletSeeding keeps triplets within maxResidual", "[B0TripletSeeding]") {
