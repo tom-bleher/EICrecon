@@ -24,7 +24,8 @@ struct B0TripletSeedingConfig {
   double maxTimeResidual = 0.;
   /// Minimum momentum of the three-hit estimate
   double minMomentum = 1. * Acts::UnitConstants::GeV;
-  /// Distance upstream of the first hit at which the seed is expressed
+  /// Distance upstream of the first hit at which the seed is expressed. The seed is moved there
+  /// along a straight line, and its position error grows by the sagitta of the track over it.
   double anchorDistance = 10. * Acts::UnitConstants::mm;
   /// Maximum number of seeds per event. Candidates are ranked by residual alone and the rest are
   /// dropped, so in a busy event genuine seeds can be lost. A warning is logged the 1st, 2nd, 4th,
