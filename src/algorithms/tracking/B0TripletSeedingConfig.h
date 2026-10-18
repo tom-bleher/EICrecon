@@ -22,7 +22,8 @@ struct B0TripletSeedingConfig {
   /// Distance upstream of the first hit at which the seed is expressed
   double anchorDistance = 10. * Acts::UnitConstants::mm;
   /// Maximum number of seeds per event. Candidates are ranked by residual alone and the rest are
-  /// dropped (logged at debug level), so in a busy event genuine seeds can be lost.
+  /// dropped, so in a busy event genuine seeds can be lost. A warning is logged the 1st, 2nd, 4th,
+  /// 8th, ... time it happens.
   std::size_t maxSeeds = 1000;
 
   /// Prior uncertainties of the seed parameters. The prior is a deliberately loose diagonal
