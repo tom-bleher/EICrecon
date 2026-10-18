@@ -19,6 +19,7 @@
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
+#include <edm4eic/unit_system.h>
 #include <edm4hep/Vector3f.h>
 #include <podio/RelationRange.h>
 #include <Eigen/Core>
@@ -238,6 +239,11 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   cfg.stationGap = std::numeric_limits<double>::quiet_NaN();
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("stationGap"));
+
+  cfg                 = B0TripletSeedingConfig{};
+  cfg.maxTimeResidual = -1.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("maxTimeResidual"));
 }
 
 TEST_CASE("B0TripletSeeding keeps triplets within maxResidual", "[B0TripletSeeding]") {
@@ -308,5 +314,29 @@ TEST_CASE("B0TripletSeeding ranks candidates and stops at maxSeeds", "[B0Triplet
     });
     CHECK(made == std::vector<double>{0.2, 0.3});
     CHECK(left == 1);
+  }
+}
+
+TEST_CASE("B0TripletSeeding rejects hits out of time", "[B0TripletSeeding]") {
+  B0TripletSeedingConfig cfg;
+  std::vector<std::vector<Point>> stations;
+  for (std::size_t i = 0; i < 3; ++i) {
+    auto p = point(helix(kStationZ[i], 1., 20.), i);
+    // In time with a track at the speed of light; Acts measures time as a length
+    p.time = p.position.norm();
+    stations.push_back({p});
+  }
+  cfg.maxTimeResidual = 0.1 * edm4eic::unit::ns;
+  CHECK(findCandidates(cfg, stations).size() == 1);
+
+  // A middle or last hit 1 ns late, as from another bunch crossing, is rejected
+  for (const std::size_t late : {1, 2}) {
+    auto shifted = stations;
+    shifted[late][0].time += 1. * Acts::UnitConstants::ns;
+    CHECK(findCandidates(cfg, shifted).empty());
+    // unless the check is off
+    auto off            = cfg;
+    off.maxTimeResidual = 0.;
+    CHECK(findCandidates(off, shifted).size() == 1);
   }
 }

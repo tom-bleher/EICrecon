@@ -17,6 +17,11 @@ struct B0TripletSeedingConfig {
   /// Maximum distance of the middle hit from the chord of the outer two,
   /// measured along the local magnetic field
   double maxResidual = 1. * Acts::UnitConstants::mm;
+  /// Maximum difference between the time difference of the first hit and each of the other two and
+  /// the flight time between them at the speed of light, in EDM4eic units (ns). It rejects hits
+  /// from other bunch crossings before the residual is computed. A proton of 1 GeV (beta = 0.73)
+  /// lags light by 1 ns across the four stations. 0 (the default) turns the check off.
+  double maxTimeResidual = 0.;
   /// Minimum momentum of the three-hit estimate
   double minMomentum = 1. * Acts::UnitConstants::GeV;
   /// Distance upstream of the first hit at which the seed is expressed
