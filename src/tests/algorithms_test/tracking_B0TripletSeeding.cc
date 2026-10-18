@@ -7,6 +7,9 @@
 #include <Acts/Geometry/GeometryContext.hpp>
 #include <Acts/MagneticField/ConstantBField.hpp>
 #include <Acts/MagneticField/MagneticFieldContext.hpp>
+#include <Acts/MagneticField/MagneticFieldError.hpp>
+#include <Acts/MagneticField/MagneticFieldProvider.hpp>
+#include <Acts/Utilities/Result.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -26,6 +29,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "algorithms/tracking/B0TripletSeeding.h"
@@ -74,6 +78,25 @@ void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, 
               edm4eic::CovDiag3f(1e-4f, 1e-4f, 0.f), time, 0.f, 1.f, 0.f);
 }
 
+/// kField below maxZ, and a failed lookup (as outside a field map) beyond
+class TruncatedField final : public Acts::MagneticFieldProvider {
+public:
+  explicit TruncatedField(double maxZ) : m_maxZ(maxZ) {}
+  Cache makeCache(const Acts::MagneticFieldContext& /* mctx */) const override {
+    return Cache(std::in_place_type<int>, 0);
+  }
+  Acts::Result<Acts::Vector3> getField(const Acts::Vector3& position,
+                                       Cache& /* cache */) const override {
+    if (position.z() > m_maxZ) {
+      return Acts::Result<Acts::Vector3>::failure(Acts::MagneticFieldError::OutOfBounds);
+    }
+    return Acts::Result<Acts::Vector3>::success(kField);
+  }
+
+private:
+  double m_maxZ;
+};
+
 } // namespace
 
 TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSeeding]") {
@@ -104,6 +127,24 @@ TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSee
   CHECK(stations[2][0].field.isZero());
   CHECK(stations[1][0].field.isApprox(kField));
   CHECK(stations[1][0].fieldDirection.isApprox(kField.normalized()));
+}
+
+TEST_CASE("B0TripletSeeding counts failed field lookups", "[B0TripletSeeding]") {
+  edm4eic::TrackerHitCollection hits;
+  for (const double z : kStationZ) {
+    addHit(hits, {0., 0., z});
+  }
+  auto stations = groupStations(hits, 50. * Acts::UnitConstants::mm);
+  REQUIRE(stations.size() == 4);
+
+  // The field ends between the two middle stations: the hit on the third station has none
+  const TruncatedField field(0.5 * (kStationZ[1] + kStationZ[2]));
+  Acts::MagneticFieldContext mctx;
+  auto cache = field.makeCache(mctx);
+  CHECK(lookUpField(stations, field, cache) == 1);
+  CHECK(stations[1][0].field.isApprox(kField));
+  CHECK(stations[2][0].field.isZero());
+  CHECK(stations[2][0].fieldDirection.isZero());
 }
 
 TEST_CASE("B0TripletSeeding measures the chord residual along the field", "[B0TripletSeeding]") {

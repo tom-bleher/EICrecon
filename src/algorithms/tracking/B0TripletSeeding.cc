@@ -23,6 +23,7 @@
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <compare>
 #include <cstddef>
@@ -257,7 +258,17 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   auto fieldCache  = field->makeCache(mctx);
 
   auto stations = groupStations(*hits, m_cfg.stationGap);
-  lookUpField(stations, *field, fieldCache);
+  // A hit without a field cannot be a middle hit. If the field map does not cover the B0 tracker,
+  // for example with a mismatched geometry, no seeds are made, so say so instead of failing quietly
+  if (const std::size_t failed = lookUpField(stations, *field, fieldCache); failed > 0) {
+    const std::size_t before = m_fieldLookupFailures.fetch_add(failed);
+    if (std::bit_width(before) < std::bit_width(before + failed)) {
+      warning(
+          "The magnetic field lookup failed at {} B0 hits in this event ({} so far); those hits "
+          "cannot be the middle hit of a seed",
+          failed, before + failed);
+    }
+  }
 
   // Triplets of hits on three stations. In a uniform field the middle hit of a
   // forward track lies close to the chord of the outer two along the field. The

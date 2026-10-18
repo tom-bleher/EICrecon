@@ -7,6 +7,8 @@
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
+#include <atomic>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -42,6 +44,10 @@ public:
 private:
   const algorithms::ActsSvc& m_actsSvc{algorithms::ActsSvc::instance()};
   const std::shared_ptr<const ActsGeometryProvider> m_geoSvc{m_actsSvc.acts_geometry_provider()};
+
+  /// Failed magnetic field lookups at possible middle hits, counted by this instance (JANA runs
+  /// one per thread). A warning is logged each time the count reaches a new power of two.
+  mutable std::atomic<std::size_t> m_fieldLookupFailures{0};
 };
 
 } // namespace eicrecon
