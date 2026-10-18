@@ -233,10 +233,18 @@ namespace b0_triplet_seeding {
     // perigee anchorDistance upstream, where CKFTracking starts the track finding
     const Acts::Vector3 anchor             = a.position - cfg.anchorDistance * direction;
     freeParams.segment<3>(Acts::eFreePos0) = anchor;
-    // Acts measures time in length units (c = 1); the shift assumes beta = 1
+    // Acts measures time in length units (c = 1); the shift assumes beta = 1. For a 1 GeV proton
+    // (beta = 0.73) it is off by 0.37 anchorDistance, 0.01 ns at the default, far below timeError.
     freeParams[Acts::eFreeTime] -= cfg.anchorDistance;
-    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
-    const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
+    // The track bends away from the straight tangent by about the sagitta anchorDistance^2 / (2 R),
+    // with 1 / R = |q/p| |direction x B| in Acts units. Add it to the position error, so that the
+    // prior covers it for any anchorDistance; at the default of 10 mm it is at most 0.02 mm.
+    const double anchorSagitta = 0.5 * cfg.anchorDistance * cfg.anchorDistance *
+                                 std::abs(freeParams[Acts::eFreeQOverP]) *
+                                 direction.cross(bField).norm();
+    const double positionError = std::hypot(cfg.positionError, anchorSagitta);
+    const auto perigee         = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
+    const auto local           = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
     if (!local.ok() || !local->allFinite()) {
       return std::nullopt;
     }
@@ -245,7 +253,7 @@ namespace b0_triplet_seeding {
     // are poorly defined, so scale their errors
     const double theta = (*local)[Acts::eBoundTheta];
     Acts::BoundVector errors;
-    errors << cfg.positionError, cfg.positionError / std::abs(std::tan(theta)),
+    errors << positionError, positionError / std::abs(std::tan(theta)),
         cfg.angleError / std::sin(theta), cfg.angleError,
         std::max(cfg.qOverPRelativeError * std::abs((*local)[Acts::eBoundQOverP]),
                  qOverPResolution),
