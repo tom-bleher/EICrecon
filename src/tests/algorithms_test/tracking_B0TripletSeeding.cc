@@ -310,3 +310,31 @@ TEST_CASE("B0TripletSeeding ranks candidates and stops at maxSeeds", "[B0Triplet
     CHECK(left == 1);
   }
 }
+
+TEST_CASE("B0TripletSeeding widens the position prior by the anchor sagitta",
+          "[B0TripletSeeding]") {
+  const auto gctx = geometryContext();
+  B0TripletSeedingConfig cfg;
+  const double p = 5.;
+  // Start the track far upstream of the first station, so that it is curved at the anchor
+  const double z0 = 5000.;
+  const auto a    = point(helix(kStationZ[0], 1., p, z0), 0);
+  const auto b    = point(helix(kStationZ[1], 1., p, z0), 1);
+  const auto c    = point(helix(kStationZ[2], 1., p, z0), 2);
+
+  const auto near = makeSeed(cfg, gctx, a, b, c);
+  REQUIRE(near.has_value());
+  // At the default anchorDistance the sagitta is negligible
+  CHECK(near->errors[Acts::eBoundLoc0] == Catch::Approx(cfg.positionError).epsilon(1e-3));
+
+  cfg.anchorDistance = 500. * Acts::UnitConstants::mm;
+  const auto far     = makeSeed(cfg, gctx, a, b, c);
+  REQUIRE(far.has_value());
+  // The anchor misses the track by about the sagitta, and the prior covers it
+  const double radius  = p * Acts::UnitConstants::GeV / kField.norm();
+  const double sagitta = 0.5 * cfg.anchorDistance * cfg.anchorDistance / radius;
+  const double miss    = std::abs(far->anchor.x() - helix(far->anchor.z(), 1., p, z0).x());
+  CHECK(miss == Catch::Approx(sagitta).epsilon(0.1));
+  CHECK(far->errors[Acts::eBoundLoc0] ==
+        Catch::Approx(std::hypot(cfg.positionError, sagitta)).epsilon(0.02));
+}
