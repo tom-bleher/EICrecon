@@ -44,9 +44,7 @@ namespace eicrecon {
 namespace b0_triplet_seeding {
 
   std::vector<std::vector<Point>> groupStations(const edm4eic::TrackerHitCollection& hits,
-                                                double stationGap,
-                                                const Acts::MagneticFieldProvider& field,
-                                                Acts::MagneticFieldProvider::Cache& fieldCache) {
+                                                double stationGap) {
     std::vector<std::size_t> order;
     for (std::size_t i = 0; i < hits.size(); ++i) {
       const auto pos = hits[i].getPosition();
@@ -75,21 +73,42 @@ namespace b0_triplet_seeding {
       const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
                               (edm4eic::unit::mm * edm4eic::unit::mm) *
                               (Acts::UnitConstants::mm * Acts::UnitConstants::mm);
-      const auto hitField   = field.getField(position, fieldCache);
       if (stations.empty() || position.z() - lastZ > stationGap) {
         stations.emplace_back();
       }
       lastZ = position.z();
-      stations.back().push_back(
-          {position, hitField.ok() ? *hitField : Acts::Vector3::Zero(), time, variance, i});
+      stations.back().push_back({.position       = position,
+                                 .field          = Acts::Vector3::Zero(),
+                                 .fieldDirection = Acts::Vector3::Zero(),
+                                 .time           = time,
+                                 .variance       = variance,
+                                 .index          = i});
     }
     return stations;
+  }
+
+  std::size_t lookUpField(std::vector<std::vector<Point>>& stations,
+                          const Acts::MagneticFieldProvider& field,
+                          Acts::MagneticFieldProvider::Cache& fieldCache) {
+    std::size_t failed = 0;
+    for (std::size_t j = 1; j + 1 < stations.size(); ++j) {
+      for (auto& point : stations[j]) {
+        const auto hitField = field.getField(point.position, fieldCache);
+        if (hitField.ok() && hitField->norm() > 0.) {
+          point.field          = *hitField;
+          point.fieldDirection = hitField->normalized();
+        } else if (!hitField.ok()) {
+          ++failed;
+        }
+      }
+    }
+    return failed;
   }
 
   double chordResidual(const Point& a, const Point& b, const Point& c) {
     const Acts::Vector3 chord = c.position - a.position;
     const double fraction     = (b.position.z() - a.position.z()) / chord.z();
-    return std::abs((b.position - a.position - fraction * chord).dot(b.field.normalized()));
+    return std::abs((b.position - a.position - fraction * chord).dot(b.fieldDirection));
   }
 
   std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
@@ -110,8 +129,8 @@ namespace b0_triplet_seeding {
     // A relative q/p error vanishes for a straight triplet. The three hits
     // resolve the curvature only up to their sagitta error over the lever arms
     // across the field, and |q/p| = curvature * sin(angle to field) / |B|.
-    const Acts::Vector3 fieldDirection = bField.normalized();
-    auto across                        = [&](const Acts::Vector3& v) {
+    const Acts::Vector3& fieldDirection = b.fieldDirection;
+    auto across                         = [&](const Acts::Vector3& v) {
       return (v - v.dot(fieldDirection) * fieldDirection).norm();
     };
     const double d1 = across(b.position - a.position);
@@ -237,7 +256,8 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   const auto field = m_geoSvc->getFieldProvider();
   auto fieldCache  = field->makeCache(mctx);
 
-  const auto stations = groupStations(*hits, m_cfg.stationGap, *field, fieldCache);
+  auto stations = groupStations(*hits, m_cfg.stationGap);
+  lookUpField(stations, *field, fieldCache);
 
   // Triplets of hits on three stations. In a uniform field the middle hit of a
   // forward track lies close to the chord of the outer two along the field. The

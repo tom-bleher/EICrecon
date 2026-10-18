@@ -59,7 +59,12 @@ Acts::GeometryContext geometryContext() {
 }
 
 Point point(const Acts::Vector3& position, std::size_t index) {
-  return {.position = position, .field = kField, .time = 0., .variance = 1e-4, .index = index};
+  return {.position       = position,
+          .field          = kField,
+          .fieldDirection = kField.normalized(),
+          .time           = 0.,
+          .variance       = 1e-4,
+          .index          = index};
 }
 
 void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.f) {
@@ -80,10 +85,7 @@ TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSee
   addHit(hits, {0., 0., std::numeric_limits<double>::quiet_NaN()});
   addHit(hits, {0., 0., kStationZ[3]}, std::numeric_limits<float>::quiet_NaN());
 
-  const Acts::ConstantBField field(kField);
-  Acts::MagneticFieldContext mctx;
-  auto cache          = field.makeCache(mctx);
-  const auto stations = groupStations(hits, 50. * Acts::UnitConstants::mm, field, cache);
+  auto stations = groupStations(hits, 50. * Acts::UnitConstants::mm);
 
   // The hits with a NaN position or time are skipped, the rest are sorted by z
   REQUIRE(stations.size() == 3);
@@ -92,7 +94,16 @@ TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSee
   CHECK(stations[2].size() == 1);
   CHECK(stations[1][0].index == 3);
   CHECK(stations[2][0].index == 2);
-  CHECK(stations[0][0].field.isApprox(kField));
+
+  // The field is only looked up on the stations that can hold a middle hit
+  const Acts::ConstantBField field(kField);
+  Acts::MagneticFieldContext mctx;
+  auto cache = field.makeCache(mctx);
+  CHECK(lookUpField(stations, field, cache) == 0);
+  CHECK(stations[0][0].field.isZero());
+  CHECK(stations[2][0].field.isZero());
+  CHECK(stations[1][0].field.isApprox(kField));
+  CHECK(stations[1][0].fieldDirection.isApprox(kField.normalized()));
 }
 
 TEST_CASE("B0TripletSeeding measures the chord residual along the field", "[B0TripletSeeding]") {
