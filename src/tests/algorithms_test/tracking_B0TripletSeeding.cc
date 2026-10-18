@@ -239,3 +239,74 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("stationGap"));
 }
+
+TEST_CASE("B0TripletSeeding keeps triplets within maxResidual", "[B0TripletSeeding]") {
+  B0TripletSeedingConfig cfg;
+  std::vector<std::vector<Point>> stations;
+  for (std::size_t i = 0; i < kStationZ.size(); ++i) {
+    stations.push_back({point(helix(kStationZ[i], 1., 20.), i)});
+  }
+  // A track on all four stations gives one candidate per station triple
+  CHECK(findCandidates(cfg, stations).size() == 4);
+
+  // A stray hit on the second station, 3 mm along the field off the track. As the first hit of the
+  // triplet on the last three stations its residual is 1.5 mm, as a middle hit 3 mm.
+  stations[1].push_back(point(helix(kStationZ[1], 1., 20.) + Acts::Vector3{0., 3., 0.}, 4));
+  CHECK(findCandidates(cfg, stations).size() == 4);
+  cfg.maxResidual = 2. * Acts::UnitConstants::mm;
+  CHECK(findCandidates(cfg, stations).size() == 5);
+  cfg.maxResidual = 4. * Acts::UnitConstants::mm;
+  CHECK(findCandidates(cfg, stations).size() == 7);
+
+  // A hit without a field is never a middle hit
+  for (auto& station : stations) {
+    for (auto& p : station) {
+      p.fieldDirection = Acts::Vector3::Zero();
+    }
+  }
+  CHECK(findCandidates(cfg, stations).empty());
+}
+
+TEST_CASE("B0TripletSeeding ranks candidates and stops at maxSeeds", "[B0TripletSeeding]") {
+  std::vector<Point> points;
+  for (std::size_t i = 0; i < 6; ++i) {
+    points.push_back(point({0., 0., 0.}, i));
+  }
+  auto candidate = [&](double residual, std::size_t first) {
+    return Candidate{.residual = residual,
+                     .points   = {&points[first], &points[first + 1], &points[first + 2]}};
+  };
+  B0TripletSeedingConfig cfg;
+
+  SECTION("in order of residual, ties broken by the hit indices") {
+    std::vector<Candidate> candidates{candidate(0.3, 0), candidate(0.1, 2), candidate(0.2, 1),
+                                      candidate(0.1, 0)};
+    std::vector<double> residuals;
+    std::vector<std::size_t> firsts;
+    const auto left = selectSeeds(cfg, candidates, [&](const Candidate& c) {
+      residuals.push_back(c.residual);
+      firsts.push_back(c.points[0]->index);
+      return true;
+    });
+    CHECK(left == 0);
+    CHECK(residuals == std::vector<double>{0.1, 0.1, 0.2, 0.3});
+    CHECK(firsts == std::vector<std::size_t>{0, 2, 1, 0});
+  }
+
+  SECTION("stopping once maxSeeds seeds were made, not counting failed ones") {
+    cfg.maxSeeds = 2;
+    std::vector<Candidate> candidates{candidate(0.4, 0), candidate(0.1, 0), candidate(0.3, 0),
+                                      candidate(0.2, 0)};
+    std::vector<double> made;
+    const auto left = selectSeeds(cfg, candidates, [&](const Candidate& c) {
+      // The best candidate fails to make a seed, as makeSeed can
+      if (c.residual < 0.15) {
+        return false;
+      }
+      made.push_back(c.residual);
+      return true;
+    });
+    CHECK(made == std::vector<double>{0.2, 0.3});
+    CHECK(left == 1);
+  }
+}
