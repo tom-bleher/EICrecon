@@ -174,8 +174,8 @@ namespace b0_triplet_seeding {
     };
     // A heap with the best candidate on top: building it is linear, and each candidate taken costs
     // a logarithm, so a busy event is not fully sorted only to be cut at maxSeeds
-    auto ranksAfter = [&](const Candidate& lhs, const Candidate& rhs) {
-      return ranksBefore(rhs, lhs);
+    auto ranksAfter = [&](const Candidate& first, const Candidate& second) {
+      return ranksBefore(second, first);
     };
     std::ranges::make_heap(candidates, ranksAfter);
     // Hits of the seeds made so far, by hit index
@@ -323,13 +323,13 @@ void B0TripletSeeding::init() {
   };
   // The comparisons are written so that NaN values fail them too
   const std::array<Named, 7> positive{{
-      {"stationGap", m_cfg.stationGap},
-      {"maxResidual", m_cfg.maxResidual},
-      {"minMomentum", m_cfg.minMomentum},
-      {"positionError", m_cfg.positionError},
-      {"angleError", m_cfg.angleError},
-      {"qOverPRelativeError", m_cfg.qOverPRelativeError},
-      {"timeError", m_cfg.timeError},
+      {.name = "stationGap", .value = m_cfg.stationGap},
+      {.name = "maxResidual", .value = m_cfg.maxResidual},
+      {.name = "minMomentum", .value = m_cfg.minMomentum},
+      {.name = "positionError", .value = m_cfg.positionError},
+      {.name = "angleError", .value = m_cfg.angleError},
+      {.name = "qOverPRelativeError", .value = m_cfg.qOverPRelativeError},
+      {.name = "timeError", .value = m_cfg.timeError},
   }};
   for (const auto& [name, value] : positive) {
     if (!(value > 0.)) {
@@ -385,11 +385,14 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   // A track crossing all stations gives one candidate per station triple, and all of them are kept.
   // The track finding does not succeed from every seed of a track, so keeping only the best one
   // per track loses tracks; the ambiguity solver removes the duplicate tracks instead.
+  auto& seedsOut            = *track_seeds;
+  auto& paramsOut           = *track_params;
+  const auto& hitsIn        = *hits;
   const std::size_t dropped = selectSeeds(m_cfg, candidates, [&](const Candidate& candidate) {
     const auto& [a, b, c] = candidate.points;
     const auto seed       = makeSeed(m_cfg, gctx, *a, *b, *c);
     if (seed) {
-      writeSeed(*seed, candidate, *hits, *track_seeds, *track_params);
+      writeSeed(*seed, candidate, hitsIn, seedsOut, paramsOut);
     }
     return seed.has_value();
   });
