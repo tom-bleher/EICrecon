@@ -28,6 +28,9 @@ private:
   PodioOutput<edm4eic::TrackSeed> m_seeds_output{this};
   PodioOutput<edm4eic::TrackParameters> m_trackparams_output{this};
 
+  // Not read here: the algorithm takes the ACTS geometry and field from algorithms::ActsSvc. The
+  // member declares that dependency, as in the other ACTS factories, and makes JANA acquire the
+  // service before Configure() constructs the algorithm. Do not remove it as unused.
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
   ParameterRef<double> m_stationGap{
