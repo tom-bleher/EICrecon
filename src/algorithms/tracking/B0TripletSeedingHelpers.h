@@ -12,6 +12,7 @@
 #include <edm4eic/TrackerHitCollection.h>
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -59,6 +60,17 @@ std::size_t lookUpField(std::vector<std::vector<Point>>& stations,
 
 /// Distance of the middle hit from the chord of the outer two, along the field at the middle hit
 double chordResidual(const Point& a, const Point& b, const Point& c);
+
+/// All triplets of hits on three different stations whose middle hit lies within maxResidual of the
+/// chord of the outer two, in no particular order
+std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
+                                      const std::vector<std::vector<Point>>& stations);
+
+/// Passes the candidates to makeSeed in order of increasing residual, ties broken by the hit
+/// indices, until makeSeed has returned true maxSeeds times. Only the candidates that are reached
+/// are ordered. Returns the number of candidates that were not reached.
+std::size_t selectSeeds(const B0TripletSeedingConfig& cfg, std::vector<Candidate>& candidates,
+                        const std::function<bool(const Candidate&)>& makeSeed);
 
 /// Seed parameters of a triplet in the field at its middle hit, if the triplet passes the
 /// momentum limit and its prior is positive definite

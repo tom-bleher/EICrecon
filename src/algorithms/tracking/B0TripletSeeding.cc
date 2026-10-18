@@ -27,6 +27,8 @@
 #include <cmath>
 #include <compare>
 #include <cstddef>
+#include <functional>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -113,6 +115,61 @@ namespace b0_triplet_seeding {
     const Acts::Vector3 chord = c.position - a.position;
     const double fraction     = (b.position.z() - a.position.z()) / chord.z();
     return std::abs((b.position - a.position - fraction * chord).dot(b.fieldDirection));
+  }
+
+  std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
+                                        const std::vector<std::vector<Point>>& stations) {
+    // Triplets of hits on three stations. In a uniform field the middle hit of a
+    // forward track lies close to the chord of the outer two along the field. The
+    // quadrupole component of the B0 magnet breaks this off its midplane, so a
+    // soft track whose triplet skips a station can exceed maxResidual.
+    std::vector<Candidate> candidates;
+    for (std::size_t i = 0; i < stations.size(); ++i) {
+      for (std::size_t j = i + 1; j < stations.size(); ++j) {
+        for (std::size_t k = j + 1; k < stations.size(); ++k) {
+          for (const auto& a : stations[i]) {
+            for (const auto& b : stations[j]) {
+              if (b.fieldDirection.isZero()) {
+                continue;
+              }
+              for (const auto& c : stations[k]) {
+                const double residual = chordResidual(a, b, c);
+                if (residual < cfg.maxResidual) {
+                  candidates.push_back({residual, {&a, &b, &c}});
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return candidates;
+  }
+
+  std::size_t selectSeeds(const B0TripletSeedingConfig& cfg, std::vector<Candidate>& candidates,
+                          const std::function<bool(const Candidate&)>& makeSeed) {
+    // The hit indices make the order total, so the seeds do not depend on the order of the hits
+    auto ranksBefore = [](const Candidate& lhs, const Candidate& rhs) {
+      return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
+                      lhs.points[2]->index) < std::tie(rhs.residual, rhs.points[0]->index,
+                                                       rhs.points[1]->index, rhs.points[2]->index);
+    };
+    // A heap with the best candidate on top: building it is linear, and each candidate taken costs
+    // a logarithm, so a busy event is not fully sorted only to be cut at maxSeeds
+    auto ranksAfter = [&](const Candidate& lhs, const Candidate& rhs) {
+      return ranksBefore(rhs, lhs);
+    };
+    std::ranges::make_heap(candidates, ranksAfter);
+    auto end          = candidates.end();
+    std::size_t seeds = 0;
+    while (end != candidates.begin() && seeds < cfg.maxSeeds) {
+      std::ranges::pop_heap(candidates.begin(), end, ranksAfter);
+      --end;
+      if (makeSeed(*end)) {
+        ++seeds;
+      }
+    }
+    return static_cast<std::size_t>(std::distance(candidates.begin(), end));
   }
 
   std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
@@ -273,52 +330,22 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     }
   }
 
-  // Triplets of hits on three stations. In a uniform field the middle hit of a
-  // forward track lies close to the chord of the outer two along the field. The
-  // quadrupole component of the B0 magnet breaks this off its midplane, so a
-  // soft track whose triplet skips a station can exceed maxResidual.
-  std::vector<Candidate> candidates;
-  for (std::size_t i = 0; i < stations.size(); ++i) {
-    for (std::size_t j = i + 1; j < stations.size(); ++j) {
-      for (std::size_t k = j + 1; k < stations.size(); ++k) {
-        for (const auto& a : stations[i]) {
-          for (const auto& b : stations[j]) {
-            if (b.field.norm() == 0.) {
-              continue;
-            }
-            for (const auto& c : stations[k]) {
-              const double residual = chordResidual(a, b, c);
-              if (residual < m_cfg.maxResidual) {
-                candidates.push_back({residual, {&a, &b, &c}});
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+  auto candidates = findCandidates(m_cfg, stations);
   // A track crossing all stations gives one candidate per station triple, and all of them are kept.
   // The track finding does not succeed from every seed of a track, so keeping only the best one
   // per track loses tracks; the ambiguity solver removes the duplicate tracks instead.
-  // The hit indices make the order total, so the seeds do not depend on the order of the hits
-  std::ranges::sort(candidates, [](const Candidate& lhs, const Candidate& rhs) {
-    return std::tie(lhs.residual, lhs.points[0]->index, lhs.points[1]->index,
-                    lhs.points[2]->index) <
-           std::tie(rhs.residual, rhs.points[0]->index, rhs.points[1]->index, rhs.points[2]->index);
-  });
-
-  for (std::size_t i = 0; i < candidates.size(); ++i) {
-    if (track_seeds->size() >= m_cfg.maxSeeds) {
-      // The candidates are ranked by residual alone, so genuine seeds can be among those dropped
-      debug("Reached maxSeeds={}: dropping the {} lowest-ranked of {} seed candidates",
-            m_cfg.maxSeeds, candidates.size() - i, candidates.size());
-      break;
-    }
-    const auto& candidate = candidates[i];
+  const std::size_t dropped = selectSeeds(m_cfg, candidates, [&](const Candidate& candidate) {
     const auto& [a, b, c] = candidate.points;
-    if (const auto seed = makeSeed(m_cfg, gctx, *a, *b, *c)) {
+    const auto seed       = makeSeed(m_cfg, gctx, *a, *b, *c);
+    if (seed) {
       writeSeed(*seed, candidate, *hits, *track_seeds, *track_params);
     }
+    return seed.has_value();
+  });
+  if (dropped > 0) {
+    // The candidates are ranked by residual alone, so genuine seeds can be among those dropped
+    debug("Reached maxSeeds={}: dropping the {} lowest-ranked of {} seed candidates",
+          m_cfg.maxSeeds, dropped, candidates.size());
   }
 
   debug("{} stations, {} triplet candidates, {} seeds", stations.size(), candidates.size(),
