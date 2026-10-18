@@ -71,11 +71,12 @@ Point point(const Acts::Vector3& position, std::size_t index) {
           .index          = index};
 }
 
-void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.f) {
+void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.f,
+            edm4eic::CovDiag3f cov = {1e-4f, 1e-4f, 0.f}) {
   hits.create(hits.size(),
               edm4hep::Vector3f(static_cast<float>(position.x()), static_cast<float>(position.y()),
                                 static_cast<float>(position.z())),
-              edm4eic::CovDiag3f(1e-4f, 1e-4f, 0.f), time, 0.f, 1.f, 0.f);
+              cov, time, 0.f, 1.f, 0.f);
 }
 
 /// kField below maxZ, and a failed lookup (as outside a field map) beyond
@@ -117,6 +118,7 @@ TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSee
   CHECK(stations[2].size() == 1);
   CHECK(stations[1][0].index == 3);
   CHECK(stations[2][0].index == 2);
+  CHECK(stations[0][0].variance == Catch::Approx(1e-4));
 
   // The field is only looked up on the stations that can hold a middle hit
   const Acts::ConstantBField field(kField);
@@ -127,6 +129,15 @@ TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSee
   CHECK(stations[2][0].field.isZero());
   CHECK(stations[1][0].field.isApprox(kField));
   CHECK(stations[1][0].fieldDirection.isApprox(kField.normalized()));
+}
+
+TEST_CASE("B0TripletSeeding takes the hit variance in the sensor plane", "[B0TripletSeeding]") {
+  edm4eic::TrackerHitCollection hits;
+  // The larger in-plane variance is used, and the one along the sensor normal is ignored
+  addHit(hits, {0., 0., kStationZ[0]}, 0.f, {1e-4f, 4e-4f, 1.f});
+  const auto stations = groupStations(hits, 50. * Acts::UnitConstants::mm);
+  REQUIRE(stations.size() == 1);
+  CHECK(stations[0][0].variance == Catch::Approx(4e-4));
 }
 
 TEST_CASE("B0TripletSeeding counts failed field lookups", "[B0TripletSeeding]") {
