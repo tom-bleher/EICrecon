@@ -68,11 +68,14 @@ namespace b0_triplet_seeding {
                                    pos.y / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                    pos.z / edm4eic::unit::mm * Acts::UnitConstants::mm};
       const double time = hits[i].getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns;
-      // The hit covariance is diagonal in local sensor coordinates; use its
-      // largest variance as an isotropic position variance
+      // The variance enters the sagitta error, across the field in the sensor plane. The hit
+      // covariance is diagonal in local sensor coordinates (xx, yy in the plane; zz along the
+      // normal, zero for 2-D pixels). The local axes are not aligned with the bending direction in
+      // general, so take the larger in-plane variance; for square pixels, as in the B0 tracker,
+      // both are equal and this is exact. The normal is nearly along the track, where a shift does
+      // not change the sagitta, so zz is left out.
       const auto cov        = hits[i].getPositionError();
-      const double variance = std::max({cov.xx, cov.yy, cov.zz}) /
-                              (edm4eic::unit::mm * edm4eic::unit::mm) *
+      const double variance = std::max(cov.xx, cov.yy) / (edm4eic::unit::mm * edm4eic::unit::mm) *
                               (Acts::UnitConstants::mm * Acts::UnitConstants::mm);
       if (stations.empty() || position.z() - lastZ > stationGap) {
         stations.emplace_back();
