@@ -21,10 +21,13 @@
 /// the geometry service
 namespace eicrecon::b0_triplet_seeding {
 
-/// A hit in Acts units, with the magnetic field at its position (zero if the lookup failed)
+/// A hit in Acts units. The magnetic field at its position and the field direction are only
+/// looked up for hits that can be the middle hit of a triplet, and are zero otherwise or if the
+/// lookup failed.
 struct Point {
   Acts::Vector3 position;
   Acts::Vector3 field;
+  Acts::Vector3 fieldDirection;
   double time;
   double variance;
   std::size_t index;
@@ -46,9 +49,13 @@ struct Seed {
 /// Sorts the hits with a finite position and time by z and splits them into stations at gaps
 /// larger than stationGap
 std::vector<std::vector<Point>> groupStations(const edm4eic::TrackerHitCollection& hits,
-                                              double stationGap,
-                                              const Acts::MagneticFieldProvider& field,
-                                              Acts::MagneticFieldProvider::Cache& fieldCache);
+                                              double stationGap);
+
+/// Looks up the magnetic field at the hits of the stations that can hold the middle hit of a
+/// triplet (all but the first and the last), and returns the number of failed lookups
+std::size_t lookUpField(std::vector<std::vector<Point>>& stations,
+                        const Acts::MagneticFieldProvider& field,
+                        Acts::MagneticFieldProvider::Cache& fieldCache);
 
 /// Distance of the middle hit from the chord of the outer two, along the field at the middle hit
 double chordResidual(const Point& a, const Point& b, const Point& c);
