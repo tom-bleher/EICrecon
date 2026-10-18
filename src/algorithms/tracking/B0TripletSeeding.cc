@@ -344,8 +344,16 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   });
   if (dropped > 0) {
     // The candidates are ranked by residual alone, so genuine seeds can be among those dropped
-    debug("Reached maxSeeds={}: dropping the {} lowest-ranked of {} seed candidates",
-          m_cfg.maxSeeds, dropped, candidates.size());
+    const std::size_t truncated = m_truncatedEvents.fetch_add(1) + 1;
+    if (std::has_single_bit(truncated)) {
+      warning(
+          "Reached maxSeeds={}: dropped the {} lowest-ranked of {} seed candidates in this event "
+          "({} events so far); genuine seeds can be among them",
+          m_cfg.maxSeeds, dropped, candidates.size(), truncated);
+    } else {
+      debug("Reached maxSeeds={}: dropped the {} lowest-ranked of {} seed candidates",
+            m_cfg.maxSeeds, dropped, candidates.size());
+    }
   }
 
   debug("{} stations, {} triplet candidates, {} seeds", stations.size(), candidates.size(),
