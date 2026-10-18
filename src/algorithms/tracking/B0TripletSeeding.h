@@ -48,6 +48,8 @@ private:
   /// Failed magnetic field lookups at possible middle hits, counted by this instance (JANA runs
   /// one per thread). A warning is logged each time the count reaches a new power of two.
   mutable std::atomic<std::size_t> m_fieldLookupFailures{0};
+  /// Events in which maxSeeds cut off seed candidates, counted and reported the same way
+  mutable std::atomic<std::size_t> m_truncatedEvents{0};
 };
 
 } // namespace eicrecon
