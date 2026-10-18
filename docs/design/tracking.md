@@ -311,7 +311,10 @@ its first hit, where the track finding starts and where the parameters of the fi
 reported: extrapolating a B0 track back to the origin fails for most negative tracks, and the
 track would be lost. A track crossing all stations gives one seed per
 station triple. All of them are kept: the track finding does not succeed from every seed, and the
-ambiguity solver keeps the best of the resulting tracks. The hit-seeded tracks need three
+ambiguity solver keeps the best of the resulting tracks. Two options, off by default, trim the
+seeds: `dropSeedsWithUsedHits` skips a triplet whose hits all belong to better seeds, which leaves
+two seeds for a track on four stations, and `maxTimeResidual` (in ns) rejects triplets whose hit
+times do not match a flight at the speed of light. The hit-seeded tracks need three
 measurements. They are combined with the central tracks for the reconstructed particles and the
 central and B0 vertices. A truth-seeded chain runs alongside for comparison.
 
