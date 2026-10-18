@@ -48,6 +48,11 @@ namespace b0_triplet_seeding {
 
   std::vector<std::vector<Point>> groupStations(const edm4eic::TrackerHitCollection& hits,
                                                 double stationGap) {
+    // The stations are found from z gaps, not from the cellID. The layer field of the B0 readout
+    // means different things in different geometries: one layer per station (1-4) in the current
+    // geometry, a front and a back layer per station (1-8) in the realistic one (epic PR #1194),
+    // so decoding it would tie the seeder to one of them. The stations are at least 270 mm apart
+    // and at most 12 mm deep in both, so a gap in z separates them in both.
     std::vector<std::size_t> order;
     for (std::size_t i = 0; i < hits.size(); ++i) {
       const auto pos = hits[i].getPosition();
@@ -216,8 +221,15 @@ namespace b0_triplet_seeding {
                                  std::abs(freeParams[Acts::eFreeQOverP]) *
                                  direction.cross(bField).norm();
     const double positionError = std::hypot(cfg.positionError, anchorSagitta);
-    const auto perigee         = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
-    const auto local           = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
+
+    // A perigee surface, whose line is along global z, because a TrackSeed carries only a perigee
+    // point and CKFTracking builds a perigee surface from it, and reports the track there. A
+    // forward track is nearly parallel to that line, so its position along the line and its
+    // azimuth are poorly defined; the prior below scales their errors to match. A plane across the
+    // track would be better conditioned, but needs changes to the TrackSeed data model and to
+    // CKFTracking, which the central tracking shares.
+    const auto perigee = Acts::Surface::makeShared<Acts::PerigeeSurface>(anchor);
+    const auto local   = Acts::transformFreeToBoundParameters(freeParams, *perigee, gctx);
     if (!local.ok() || !local->allFinite()) {
       return std::nullopt;
     }
