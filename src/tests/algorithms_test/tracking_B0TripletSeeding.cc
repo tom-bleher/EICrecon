@@ -71,12 +71,12 @@ Point point(const Acts::Vector3& position, std::size_t index) {
           .index          = index};
 }
 
-void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.f,
-            edm4eic::CovDiag3f cov = {1e-4f, 1e-4f, 0.f}) {
+void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.F,
+            edm4eic::CovDiag3f cov = {1e-4F, 1e-4F, 0.F}) {
   hits.create(hits.size(),
               edm4hep::Vector3f(static_cast<float>(position.x()), static_cast<float>(position.y()),
                                 static_cast<float>(position.z())),
-              cov, time, 0.f, 1.f, 0.f);
+              cov, time, 0.F, 1.F, 0.F);
 }
 
 /// kField below maxZ, and a failed lookup (as outside a field map) beyond
@@ -134,7 +134,7 @@ TEST_CASE("B0TripletSeeding groups hits into stations at z gaps", "[B0TripletSee
 TEST_CASE("B0TripletSeeding takes the hit variance in the sensor plane", "[B0TripletSeeding]") {
   edm4eic::TrackerHitCollection hits;
   // The larger in-plane variance is used, and the one along the sensor normal is ignored
-  addHit(hits, {0., 0., kStationZ[0]}, 0.f, {1e-4f, 4e-4f, 1.f});
+  addHit(hits, {0., 0., kStationZ[0]}, 0.F, {1e-4F, 4e-4F, 1.F});
   const auto stations = groupStations(hits, 50. * Acts::UnitConstants::mm);
   REQUIRE(stations.size() == 1);
   CHECK(stations[0][0].variance == Catch::Approx(4e-4));
@@ -203,7 +203,7 @@ TEST_CASE("B0TripletSeeding writes seeds in EDM4eic units", "[B0TripletSeeding]"
   edm4eic::TrackerHitCollection hits;
   std::vector<Point> points;
   for (std::size_t i = 0; i < 3; ++i) {
-    const auto position = helix(kStationZ[i], 1., 20.);
+    const auto position = helix(kStationZ.at(i), 1., 20.);
     addHit(hits, position);
     points.push_back(point(position, i));
   }
@@ -247,8 +247,8 @@ TEST_CASE("B0TripletSeeding writes seeds in EDM4eic units", "[B0TripletSeeding]"
   const double qOverPError = err[Acts::eBoundQOverP] * Acts::UnitConstants::GeV;
   CHECK(cov(4, 4) == Catch::Approx(qOverPError * qOverPError).epsilon(1e-5));
   // The prior is diagonal
-  CHECK(cov(0, 1) == 0.f);
-  CHECK(cov(4, 5) == 0.f);
+  CHECK(cov(0, 1) == 0.F);
+  CHECK(cov(4, 5) == 0.F);
   // The seed refers to its parameters and its hits
   CHECK(seeds[0].getParams().getObjectID() == params[0].getObjectID());
   for (std::size_t i = 0; i < 3; ++i) {
@@ -295,7 +295,7 @@ TEST_CASE("B0TripletSeeding keeps triplets within maxResidual", "[B0TripletSeedi
   B0TripletSeedingConfig cfg;
   std::vector<std::vector<Point>> stations;
   for (std::size_t i = 0; i < kStationZ.size(); ++i) {
-    stations.push_back({point(helix(kStationZ[i], 1., 20.), i)});
+    stations.push_back({point(helix(kStationZ.at(i), 1., 20.), i)});
   }
   // A track on all four stations gives one candidate per station triple
   CHECK(findCandidates(cfg, stations).size() == 4);
