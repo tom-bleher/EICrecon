@@ -202,4 +202,9 @@ TEST_CASE("The luminous region follows the beam configuration", "[TrackVertexCon
   CHECK(TrackVertexConstraint::beamSpot(5., 41., "hiDiv")->sigma.z() == Catch::Approx(37.5));
   CHECK_FALSE(TrackVertexConstraint::beamSpot(10., 130., "hiDiv"));
   CHECK_FALSE(TrackVertexConstraint::beamSpot(5., 41., "other"));
+  // A configuration without its own entry falls back to the widest spread of each coordinate
+  const auto widest = TrackVertexConstraint::widestBeamSpot();
+  CHECK(widest.sigma.x() == Catch::Approx(0.223));
+  CHECK(widest.sigma.y() == Catch::Approx(0.0187));
+  CHECK(widest.sigma.z() == Catch::Approx(37.5));
 }

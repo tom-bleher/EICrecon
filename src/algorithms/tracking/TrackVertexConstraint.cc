@@ -128,6 +128,16 @@ TrackVertexConstraint::beamSpot(double electronEnergy, double ionEnergy,
   return std::nullopt;
 }
 
+TrackVertexConstraint::BeamSpot TrackVertexConstraint::widestBeamSpot() {
+  BeamSpot widest{.sigma = Eigen::Vector3d::Zero()};
+  for (const auto& c : kBeamConfigurations) {
+    for (const auto& s : {c.hiDiv, c.hiAcc}) {
+      widest.sigma = widest.sigma.cwiseMax(Eigen::Vector3d{s[0], s[1], s[2]});
+    }
+  }
+  return widest;
+}
+
 void TrackVertexConstraint::init() {
   m_spot      = {m_cfg.beamSpotX, m_cfg.beamSpotY, m_cfg.beamSpotZ};
   m_spotSigma = {m_cfg.beamSpotSigmaX, m_cfg.beamSpotSigmaY, m_cfg.beamSpotSigmaZ};
@@ -144,12 +154,17 @@ void TrackVertexConstraint::init() {
     error("The geometry has no beam energies ({}): set the beam spot spreads", e.what());
     throw;
   }
-  const auto spot = beamSpot(electronEnergy, ionEnergy, m_cfg.beamSetting);
+  if (m_cfg.beamSetting != "hiDiv" && m_cfg.beamSetting != "hiAcc") {
+    error("Unknown beam setting '{}': use hiDiv or hiAcc", m_cfg.beamSetting);
+    throw std::runtime_error("unknown beam setting for the vertex constraint");
+  }
+  auto spot = beamSpot(electronEnergy, ionEnergy, m_cfg.beamSetting);
   if (!spot) {
-    error("No luminous region for {:.0f}x{:.0f} GeV with beam setting '{}': set the beam spot "
-          "spreads",
-          electronEnergy, ionEnergy, m_cfg.beamSetting);
-    throw std::runtime_error("unknown beam configuration for the vertex constraint");
+    // A looser constraint than the true one only gives up some of the gain; a tighter one biases
+    spot = widestBeamSpot();
+    warning("No luminous region for {:.0f}x{:.0f} GeV: using the widest one of the known "
+            "configurations; set the beam spot spreads for this configuration",
+            electronEnergy, ionEnergy);
   }
   for (int i = 0; i < 3; ++i) {
     if (!(m_spotSigma(i) > 0.)) {

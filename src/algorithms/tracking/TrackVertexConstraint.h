@@ -84,6 +84,9 @@ public:
   };
   static std::optional<BeamSpot> beamSpot(double electronEnergy, double ionEnergy,
                                           const std::string& setting);
+  /// The largest spread of every coordinate over all configurations and settings, for a beam
+  /// configuration without its own entry
+  static BeamSpot widestBeamSpot();
 
 private:
   Eigen::Vector3d m_spot{Eigen::Vector3d::Zero()};
