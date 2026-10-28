@@ -63,21 +63,27 @@ Acts::GeometryContext geometryContext() {
 #endif
 }
 
+/// A hit reached at the speed of light from the origin (Acts measures time as a length)
 Point point(const Acts::Vector3& position, std::size_t index) {
   return {.position       = position,
           .field          = kField,
           .fieldDirection = kField.normalized(),
-          .time           = 0.,
+          .time           = position.norm(),
           .variance       = 1e-4,
           .index          = index};
 }
 
-void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.F,
-            edm4eic::CovDiag3f cov = {1e-4F, 1e-4F, 0.F}) {
+/// A hit at the time a particle from the origin at the speed of light reaches it, unless given
+void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position,
+            std::optional<float> time = std::nullopt,
+            edm4eic::CovDiag3f cov    = {1e-4F, 1e-4F, 0.F}) {
+  if (!time) {
+    time = static_cast<float>(position.norm() / Acts::UnitConstants::ns * edm4eic::unit::ns);
+  }
   hits.create(hits.size(),
               edm4hep::Vector3f(static_cast<float>(position.x()), static_cast<float>(position.y()),
                                 static_cast<float>(position.z())),
-              cov, time, 0.F, 1.F, 0.F);
+              cov, *time, 0.F, 1.F, 0.F);
 }
 
 /// kField below maxZ, and a failed lookup (as outside a field map) beyond
@@ -213,7 +219,8 @@ TEST_CASE("B0TripletSeeding writes seeds in EDM4eic units", "[B0TripletSeeding]"
 
   edm4eic::TrackSeedCollection seeds;
   edm4eic::TrackParametersCollection params;
-  const Candidate candidate{.residual = 0.25, .points = {&points[0], &points[1], &points[2]}};
+  const Candidate candidate{.residual = 0.25,
+                            .points   = {&points.at(0), &points.at(1), &points.at(2)}};
   writeSeed(*seed, candidate, hits, seeds, params);
 
   REQUIRE(seeds.size() == 1);

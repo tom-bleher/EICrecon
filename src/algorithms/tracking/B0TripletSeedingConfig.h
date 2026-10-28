@@ -19,9 +19,10 @@ struct B0TripletSeedingConfig {
   double maxResidual = 1. * Acts::UnitConstants::mm;
   /// Maximum difference between the time difference of the first hit and each of the other two and
   /// the flight time between them at the speed of light, in EDM4eic units (ns). It rejects hits
-  /// from other bunch crossings before the residual is computed. A proton of 1 GeV (beta = 0.73)
-  /// lags light by 1 ns across the four stations. 0 (the default) turns the check off.
-  double maxTimeResidual = 0.;
+  /// from other bunch crossings before the residual is computed, which needs no event time. Across
+  /// the four stations a proton lags light by 1 ns at 1.15 GeV and 0.3 ns at 2.3 GeV, so 1 ns keeps
+  /// tracks down to about minMomentum. 0 turns the check off.
+  double maxTimeResidual = 1. * edm4eic::unit::ns;
   /// Minimum momentum of the three-hit estimate
   double minMomentum = 1. * Acts::UnitConstants::GeV;
   /// Distance upstream of the first hit at which the seed is expressed. The seed is moved there
