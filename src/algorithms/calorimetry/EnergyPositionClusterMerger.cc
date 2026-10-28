@@ -199,6 +199,46 @@ void EnergyPositionClusterMerger::process(const Input& input, const Output& outp
       debug("  Unmatched position cluster {}", pc.getObjectID().index);
     }
   }
+
+  // energy clusters without a position partner are dropped unless configured otherwise; then they
+  // are passed through with their own energy and position, and their associations
+  if (!m_cfg.keepUnmatchedEnergyClusters) {
+    return;
+  }
+  for (std::size_t ie = 0; ie < energy_clus->size(); ++ie) {
+    if (consumed[ie]) {
+      continue;
+    }
+    const auto& ec = (*energy_clus)[ie];
+    auto new_clus  = merged_clus->create();
+    new_clus.setEnergy(ec.getEnergy());
+    new_clus.setEnergyError(ec.getEnergyError());
+    new_clus.setTime(ec.getTime());
+    new_clus.setTimeError(ec.getTimeError());
+    new_clus.setNhits(ec.getNhits());
+    new_clus.setPosition(ec.getPosition());
+    new_clus.setPositionError(ec.getPositionError());
+    new_clus.addToClusters(ec);
+    for (const auto& hit : ec.getHits()) {
+      new_clus.addToHits(hit);
+    }
+    new_clus.addToSubdetectorEnergies(ec.getEnergy());
+    for (const auto& ea : *energy_assoc) {
+      if (ea.getRec() == ec) {
+        auto clusterlink = merged_links->create();
+        clusterlink.setWeight(ea.getWeight());
+        clusterlink.setFrom(new_clus);
+        clusterlink.setTo(ea.getSim());
+        auto clusterassoc = merged_assoc->create();
+        clusterassoc.setWeight(ea.getWeight());
+        clusterassoc.setRec(new_clus);
+        clusterassoc.setSim(ea.getSim());
+      }
+    }
+    debug("  Passed through unmatched energy cluster {} (E: {}, phi: {}, z: {})",
+          ec.getObjectID().index, ec.getEnergy(), edm4hep::utils::angleAzimuthal(ec.getPosition()),
+          ec.getPosition().z);
+  }
 }
 
 } // namespace eicrecon

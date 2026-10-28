@@ -32,6 +32,8 @@ private:
                                             config().energyRelTolerance};
   ParameterRef<double> m_phiTolerance{this, "phiTolerance", config().phiTolerance};
   ParameterRef<double> m_etaTolerance{this, "etaTolerance", config().etaTolerance};
+  ParameterRef<bool> m_keepUnmatchedEnergyClusters{this, "keepUnmatchedEnergyClusters",
+                                                   config().keepUnmatchedEnergyClusters};
 
   Service<AlgorithmsInit_service> m_algorithmsInit{this};
 
