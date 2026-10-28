@@ -316,6 +316,22 @@ times do not match a flight at the speed of light. The hit-seeded tracks need th
 measurements. They are combined with the central tracks for the reconstructed particles and the
 central and B0 vertices. A truth-seeded chain runs alongside for comparison.
 
+`CKFTracking` starts each track on its seed's perigee and, after the smoothing, expresses it on
+the perigee of the origin. In the B0 dipole a negative track bends towards the beam line, so the
+straight tangent at its first state meets the beam line downstream; the extrapolation is then
+retried backward from the first measurement, and a track that cannot reach the beam line (e.g. a
+daughter of a decay far from the interaction point) is kept on the perigee of its seed.
+`IterativeVertexFinder` leaves such tracks out, since it cannot linearize them at the interaction
+point.
+
+`TrackVertexConstraint` makes a second set of B0 tracks for prompt particles. It estimates the
+vertex from the luminous region of the beam configuration (`beamSetting` hiDiv or hiAcc, or
+explicit spreads), updated with the first central vertex or, without one, with the central
+tracks, and updates the perigee parameters of every B0 track that is compatible with it
+(`maxChi2`). The constrained tracks have the same measurements as the unconstrained ones; tracks
+of decay products also pass the compatibility test, so analyses of decays use the unconstrained
+tracks. To write the constrained tracks, also write `B0TrackerMeasurements`, which they refer to.
+
 ```mermaid
 flowchart TB
   classDef alg fill:#f96;
@@ -351,6 +367,14 @@ flowchart TB
     B0ActsToTracks --> B0TrackerCKFTrajectories:::col
     B0ActsToTracks --> B0TrackerCKFTrackParameters:::col
     B0ActsToTracks --> B0TrackerCKFTrackAssociations:::col
+
+    B0VertexConstraint[TrackVertexConstraint]:::alg
+    B0TrackerCKFTracks --> B0VertexConstraint
+    CentralTrackVertices:::col --> B0VertexConstraint
+    CentralCKFTracks:::col --> B0VertexConstraint
+    B0VertexConstraint --> B0TrackerCKFTracksVertexConstrained:::col
+    B0TrackerCKFTracksVertexConstrained --> B0VCTracksToParticles[TracksToParticles]:::alg
+    B0VCTracksToParticles --> B0VertexConstrainedChargedParticles:::col
 
     B0TrackerTruthSeeds:::col --> B0TruthSeededChain[CKFTracking, AmbiguitySolver, ActsToTracks]:::alg
     B0TrackerMeasurements --> B0TruthSeededChain
