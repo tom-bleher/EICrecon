@@ -62,13 +62,16 @@ Acts::GeometryContext geometryContext() {
 #endif
 }
 
+/// A hit in time with a particle at the speed of light from the origin (Acts measures time as a
+/// length), with a 30 ps time error
 Point point(const Acts::Vector3& position, std::size_t index) {
   return {.position       = position,
           .field          = kField,
           .fieldDirection = kField.normalized(),
-          .time           = 0.,
+          .time           = position.norm(),
           .variance       = 1e-4,
-          .index          = index};
+          .index          = index,
+          .timeError      = 0.03 * Acts::UnitConstants::ns};
 }
 
 void addHit(edm4eic::TrackerHitCollection& hits, const Acts::Vector3& position, float time = 0.F,
@@ -270,7 +273,6 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("stationGap"));
 
-
   cfg                = B0TripletSeedingConfig{};
   cfg.anchorDistance = -1.;
   algo.applyConfig(cfg);
@@ -285,6 +287,16 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   cfg.timeError = 0.;
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("timeError"));
+
+  cfg                  = B0TripletSeedingConfig{};
+  cfg.timeWindowSigmas = -1.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("timeWindowSigmas"));
+
+  cfg                = B0TripletSeedingConfig{};
+  cfg.timeErrorFloor = 0.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("timeErrorFloor"));
 
   // A valid configuration passes the checks and only fails for the missing field
   algo.applyConfig(B0TripletSeedingConfig{});
@@ -316,6 +328,66 @@ TEST_CASE("B0TripletSeeding keeps triplets within maxResidual", "[B0TripletSeedi
     }
   }
   CHECK(findCandidates(cfg, stations).empty());
+}
+
+TEST_CASE("B0TripletSeeding keeps hits within the time window", "[B0TripletSeeding]") {
+  B0TripletSeedingConfig cfg;
+  const double ns = Acts::UnitConstants::ns;
+  // Two hits 1030 mm apart, as the first and the last station of the realistic B0 tracker, with
+  // 30 ps time errors. Acts measures time as a length, so a hit in time with light has t = z.
+  auto hit = [&](double z, double lag, double error = 0.03) {
+    auto p      = point({0., 0., z}, 0);
+    p.time      = z + lag * ns;
+    p.timeError = error * ns;
+    return p;
+  };
+  const double z0  = 5850.;
+  const double z1  = z0 + 1030.;
+  const auto first = hit(z0, 0.);
+  // A light-speed hit passes, and so does a 1.2 GeV proton: beta = 0.79, a lag of 0.92 ns
+  CHECK(inTimeWindow(cfg, first, hit(z1, 0.)));
+  CHECK(inTimeWindow(cfg, first, hit(z1, 0.92)));
+  // At the default minMomentum of 1 GeV the window ends at the lag of a 1 GeV proton, 1.28 ns,
+  // plus 5 sigma of 0.042 ns
+  CHECK(inTimeWindow(cfg, first, hit(z1, 1.45)));
+  CHECK_FALSE(inTimeWindow(cfg, first, hit(z1, 1.55)));
+  // Nothing is faster than light: a hit 0.3 ns early is rejected, unlike one within the errors
+  CHECK_FALSE(inTimeWindow(cfg, first, hit(z1, -0.3)));
+  CHECK(inTimeWindow(cfg, first, hit(z1, -0.1)));
+  // The window scales with the distance: over 422 mm a 1 GeV proton lags only 0.52 ns
+  CHECK(inTimeWindow(cfg, first, hit(z0 + 422., 0.5)));
+  CHECK_FALSE(inTimeWindow(cfg, first, hit(z0 + 422., 0.9)));
+  // A heavier slow particle widens it: a deuteron at 1 GeV per unit charge lags 3.87 ns
+  auto deuteron             = cfg;
+  deuteron.slowParticleMass = 1.876 * Acts::UnitConstants::GeV;
+  CHECK(inTimeWindow(deuteron, first, hit(z1, 3.85)));
+  CHECK_FALSE(inTimeWindow(cfg, first, hit(z1, 3.85)));
+  // With 8 ns hit time errors, as before the B0 timing was set to 30 ps, the window rejects nothing
+  CHECK(inTimeWindow(cfg, hit(z0, 0., 8.), hit(z1, 30., 8.)));
+  CHECK(inTimeWindow(cfg, hit(z0, 0., 8.), hit(z1, -30., 8.)));
+  // A hit without a valid time error is never rejected
+  CHECK(inTimeWindow(cfg, first, hit(z1, 30., std::numeric_limits<double>::quiet_NaN())));
+  // and the window can be turned off
+  auto off             = cfg;
+  off.timeWindowSigmas = 0.;
+  CHECK(inTimeWindow(off, first, hit(z1, -30.)));
+}
+
+TEST_CASE("B0TripletSeeding rejects triplets out of time", "[B0TripletSeeding]") {
+  B0TripletSeedingConfig cfg;
+  std::vector<std::vector<Point>> stations;
+  for (std::size_t i = 0; i < 3; ++i) {
+    stations.push_back({point(helix(kStationZ.at(i), 1., 20.), i)});
+  }
+  CHECK(findCandidates(cfg, stations).size() == 1);
+  // A middle or last hit from another bunch crossing, 10 ns later or earlier, is rejected
+  for (const std::size_t shifted : {1, 2}) {
+    for (const double offset : {-10., 10.}) {
+      auto other = stations;
+      other[shifted][0].time += offset * Acts::UnitConstants::ns;
+      CHECK(findCandidates(cfg, other).empty());
+    }
+  }
 }
 
 TEST_CASE("B0TripletSeeding ranks candidates and stops at maxSeeds", "[B0TripletSeeding]") {

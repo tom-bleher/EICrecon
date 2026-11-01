@@ -46,6 +46,17 @@ private:
       "distance upstream of the first hit at which seeds are expressed, in Acts units (mm)"};
   ParameterRef<std::size_t> m_maxSeeds{this, "maxSeeds", config().maxSeeds,
                                        "max number of seeds per event"};
+  ParameterRef<double> m_timeWindowSigmas{
+      this, "timeWindowSigmas", config().timeWindowSigmas,
+      "hit-time window width in units of the combined hit time error, 0 turns it off"};
+  ParameterRef<double> m_timeWindowTolerance{this, "timeWindowTolerance",
+                                             config().timeWindowTolerance,
+                                             "extra width of the hit-time window, in ns"};
+  ParameterRef<double> m_timeErrorFloor{this, "timeErrorFloor", config().timeErrorFloor,
+                                        "min hit time error in the time window, in ns"};
+  ParameterRef<double> m_slowParticleMass{
+      this, "slowParticleMass", config().slowParticleMass,
+      "mass per unit charge of the slowest particles to seed, in Acts units (GeV)"};
   ParameterRef<double> m_positionError{this, "positionError", config().positionError,
                                        "error on the seed position, in Acts units (mm)"};
   ParameterRef<double> m_angleError{this, "angleError", config().angleError,

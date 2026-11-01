@@ -74,7 +74,8 @@ namespace b0_triplet_seeding {
       const Acts::Vector3 position{pos.x / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                    pos.y / edm4eic::unit::mm * Acts::UnitConstants::mm,
                                    pos.z / edm4eic::unit::mm * Acts::UnitConstants::mm};
-      const double time = hits[i].getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns;
+      const double time      = hits[i].getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns;
+      const double timeError = hits[i].getTimeError() / edm4eic::unit::ns * Acts::UnitConstants::ns;
       // The variance enters the sagitta error, across the field in the sensor plane. The hit
       // covariance is diagonal in local sensor coordinates (xx, yy in the plane; zz along the
       // normal, zero for 2-D pixels). The local axes are not aligned with the bending direction in
@@ -93,7 +94,8 @@ namespace b0_triplet_seeding {
                                  .fieldDirection = Acts::Vector3::Zero(),
                                  .time           = time,
                                  .variance       = variance,
-                                 .index          = i});
+                                 .index          = i,
+                                 .timeError      = timeError});
     }
     return stations;
   }
@@ -122,6 +124,28 @@ namespace b0_triplet_seeding {
     return std::abs((b.position - a.position - fraction * chord).dot(b.fieldDirection));
   }
 
+  bool inTimeWindow(const B0TripletSeedingConfig& cfg, const Point& first, const Point& later) {
+    if (!(cfg.timeWindowSigmas > 0.)) {
+      return true;
+    }
+    // Acts measures time as a length (c = 1), so the lag behind light is in mm
+    const double distance = (later.position - first.position).norm();
+    const double lag      = later.time - first.time - distance;
+    // The flight time of the slowest seeded particle exceeds that of light by distance * (1 / beta
+    // - 1), with 1 / beta = E / p at the minimum momentum
+    const double slowLag =
+        distance * (std::hypot(cfg.minMomentum, cfg.slowParticleMass) / cfg.minMomentum - 1.);
+    // A hit without a valid time error cannot be rejected
+    const double floor = cfg.timeErrorFloor / edm4eic::unit::ns * Acts::UnitConstants::ns;
+    auto error         = [&](const Point& point) {
+      return std::isfinite(point.timeError) ? std::max(point.timeError, floor)
+                                            : std::numeric_limits<double>::infinity();
+    };
+    const double tolerance = cfg.timeWindowSigmas * std::hypot(error(first), error(later)) +
+                             cfg.timeWindowTolerance / edm4eic::unit::ns * Acts::UnitConstants::ns;
+    return lag >= -tolerance && lag <= slowLag + tolerance;
+  }
+
   std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
                                         const std::vector<std::vector<Point>>& stations) {
     // Triplets of hits on three stations. In a uniform field the middle hit of a
@@ -134,10 +158,13 @@ namespace b0_triplet_seeding {
         for (std::size_t k = j + 1; k < stations.size(); ++k) {
           for (const auto& a : stations[i]) {
             for (const auto& b : stations[j]) {
-              if (b.fieldDirection.isZero()) {
+              if (b.fieldDirection.isZero() || !inTimeWindow(cfg, a, b)) {
                 continue;
               }
               for (const auto& c : stations[k]) {
+                if (!inTimeWindow(cfg, b, c) || !inTimeWindow(cfg, a, c)) {
+                  continue;
+                }
                 const double residual = chordResidual(a, b, c);
                 if (residual < cfg.maxResidual) {
                   candidates.push_back({residual, {&a, &b, &c}});
@@ -295,7 +322,7 @@ void B0TripletSeeding::init() {
     double value;
   };
   // The comparisons are written so that NaN values fail them too
-  const std::array<Named, 7> positive{{
+  const std::array<Named, 8> positive{{
       {.name = "stationGap", .value = m_cfg.stationGap},
       {.name = "maxResidual", .value = m_cfg.maxResidual},
       {.name = "minMomentum", .value = m_cfg.minMomentum},
@@ -303,6 +330,7 @@ void B0TripletSeeding::init() {
       {.name = "angleError", .value = m_cfg.angleError},
       {.name = "qOverPRelativeError", .value = m_cfg.qOverPRelativeError},
       {.name = "timeError", .value = m_cfg.timeError},
+      {.name = "timeErrorFloor", .value = m_cfg.timeErrorFloor},
   }};
   for (const auto& [name, value] : positive) {
     if (!(value > 0.)) {
@@ -310,9 +338,17 @@ void B0TripletSeeding::init() {
           fmt::format("B0TripletSeeding: {} must be positive, got {}", name, value));
     }
   }
-  if (!(m_cfg.anchorDistance >= 0.)) {
-    throw std::runtime_error(fmt::format(
-        "B0TripletSeeding: anchorDistance must not be negative, got {}", m_cfg.anchorDistance));
+  const std::array<Named, 4> nonNegative{{
+      {.name = "anchorDistance", .value = m_cfg.anchorDistance},
+      {.name = "timeWindowSigmas", .value = m_cfg.timeWindowSigmas},
+      {.name = "timeWindowTolerance", .value = m_cfg.timeWindowTolerance},
+      {.name = "slowParticleMass", .value = m_cfg.slowParticleMass},
+  }};
+  for (const auto& [name, value] : nonNegative) {
+    if (!(value >= 0.)) {
+      throw std::runtime_error(
+          fmt::format("B0TripletSeeding: {} must not be negative, got {}", name, value));
+    }
   }
   if (m_cfg.maxSeeds == 0) {
     throw std::runtime_error("B0TripletSeeding: maxSeeds must be positive");

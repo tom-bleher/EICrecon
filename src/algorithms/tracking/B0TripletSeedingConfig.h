@@ -27,6 +27,23 @@ struct B0TripletSeedingConfig {
   /// 8th, ... time it happens.
   std::size_t maxSeeds = 1000;
 
+  /// Hit-time window. A particle is never faster than light, so the later of two hits may only
+  /// lag by up to the flight time of the slowest seeded particle, distance * (1 / beta_min - 1),
+  /// and may not be early. Both bounds are widened by timeWindowSigmas times the combined hit time
+  /// error (TrackerHit::getTimeError(), at least timeErrorFloor each) and by timeWindowTolerance.
+  /// beta_min is that of a particle of mass slowParticleMass at minMomentum. With hit time errors
+  /// of several ns (before the B0 timing was set to 30 ps) the window rejects nothing.
+  /// 0 turns the window off.
+  double timeWindowSigmas = 5.;
+  /// in EDM4eic units (ns)
+  double timeWindowTolerance = 0.;
+  /// in EDM4eic units (ns)
+  double timeErrorFloor = 0.01;
+  /// Mass per unit charge of the slowest particles to seed. minMomentum is a cut on rigidity, so
+  /// for nuclear fragments set the mass per unit charge: about 1.876 GeV for deuterons, alpha
+  /// particles and carbon nuclei.
+  double slowParticleMass = 0.938272 * Acts::UnitConstants::GeV;
+
   /// Prior uncertainties of the seed parameters. The prior is a deliberately loose diagonal
   /// envelope, not an error estimate: the track finder refits from it, so it only has to cover
   /// the true error. The relative q/p error is a floor that dominates for most seeds. Widening

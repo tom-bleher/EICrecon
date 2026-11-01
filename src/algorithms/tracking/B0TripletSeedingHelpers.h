@@ -32,6 +32,7 @@ struct Point {
   double time;
   double variance;
   std::size_t index;
+  double timeError = 0.;
 };
 
 /// A triplet of hits on three stations and the distance of its middle hit from the chord
@@ -61,8 +62,13 @@ std::size_t lookUpField(std::vector<std::vector<Point>>& stations,
 /// Distance of the middle hit from the chord of the outer two, along the field at the middle hit
 double chordResidual(const Point& a, const Point& b, const Point& c);
 
-/// All triplets of hits on three different stations whose middle hit lies within maxResidual of the
-/// chord of the outer two, in no particular order
+/// Whether the later hit can follow the first one in time: it may lag by up to the flight time
+/// of the slowest seeded particle over their distance and may not be early, both within the time
+/// window tolerance. Always true when the window is off.
+bool inTimeWindow(const B0TripletSeedingConfig& cfg, const Point& first, const Point& later);
+
+/// All triplets of hits on three different stations, in time with each other, whose middle hit
+/// lies within maxResidual of the chord of the outer two, in no particular order
 std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
                                       const std::vector<std::vector<Point>>& stations);
 
