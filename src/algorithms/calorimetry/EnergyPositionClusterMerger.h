@@ -23,8 +23,9 @@ using EnergyPositionClusterMergerAlgorithm = algorithms::Algorithm<
                        edm4eic::MCRecoClusterParticleAssociationCollection>>;
 
 /** Simple algorithm to merge the energy measurement from cluster1 with the position
-  * measurement of cluster2 (in case matching clusters are found). If not, it will
-  * propagate the raw cluster from cluster1 or cluster2
+  * measurement of cluster2 (in case matching clusters are found). Energy clusters without
+  * a match are dropped, or with keepUnmatchedEnergyClusters passed through with their own
+  * energy and position. Unmatched position clusters are dropped.
   *
   * Matching occurs based on the cluster phi, eta and E variables, with tolerances
   * defined in the options file. A negative tolerance effectively disables

@@ -440,9 +440,10 @@ void InitPlugin(JApplication* app) {
       {"EcalBarrelClustersWithoutShapes", "EcalBarrelClusterLinksWithoutShapes",
        "EcalBarrelClusterAssociationsWithoutShapes"},
       {
-          .energyRelTolerance = 0.5,
-          .phiTolerance       = 0.1,
-          .etaTolerance       = 0.2,
+          .energyRelTolerance          = 0.5,
+          .phiTolerance                = 0.1,
+          .etaTolerance                = 0.2,
+          .keepUnmatchedEnergyClusters = true,
       },
       app // TODO: Remove me once fixed
       ));
