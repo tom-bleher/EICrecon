@@ -69,6 +69,21 @@ struct B0TripletSeedingConfig {
   double qOverPRelativeError = 0.25;
   /// in EDM4eic units (ns), unlike the other values: Acts measures time as a length
   double timeError = 10. * edm4eic::unit::ns;
+
+  /// Particle hypothesis of the seeds, written to TrackParameters::pdg for the track finding,
+  /// which uses its mass for the multiple scattering and energy loss and, with hit times, for the
+  /// expected time of flight. The times of the three hits measure 1/beta to about 1.3 % with
+  /// 30 ps hits, which separates protons from pions up to about 3 GeV. Most B0 tracks are
+  /// protons, so a seed is a proton unless its 1/beta lies pionSigmas errors or more below that
+  /// of a proton of its momentum, which makes it a pion. Above a few GeV, where they cannot be
+  /// told apart, the proton mass still gives the right multiple scattering for protons and changes
+  /// it by a few % at most for pions. No hypothesis is written (pdg 0, for which the track finding
+  /// uses pions) if the error on 1/beta exceeds maxInverseBetaError, as with hit time errors of
+  /// several ns, or if massFromTimeOfFlight is off. Like Track::pdg, which is the pion for every
+  /// other track, this is the mass hypothesis of the track fit, not a particle identification.
+  bool massFromTimeOfFlight  = true;
+  double pionSigmas          = 3.;
+  double maxInverseBetaError = 0.1;
 };
 
 } // namespace eicrecon

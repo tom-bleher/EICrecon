@@ -364,6 +364,11 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("fieldTermAllowance"));
 
+  cfg            = B0TripletSeedingConfig{};
+  cfg.pionSigmas = -1.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("pionSigmas"));
+
   cfg                = B0TripletSeedingConfig{};
   cfg.timeErrorFloor = 0.;
   algo.applyConfig(cfg);
@@ -496,6 +501,65 @@ TEST_CASE("B0TripletSeeding corrects for the field change along the triplet",
       }
     }
   }
+}
+
+TEST_CASE("B0TripletSeeding chooses the mass hypothesis from the time of flight",
+          "[B0TripletSeeding]") {
+  B0TripletSeedingConfig cfg;
+  const double ns = Acts::UnitConstants::ns;
+  // Hits of the realistic B0 stations 1, 2 and 4 on a straight line along z, with 30 ps time errors.
+  // Acts measures time as a length, so a particle of velocity beta takes path / beta.
+  auto hits = [&](double inverseBeta, double error = 0.03) {
+    std::array<Point, 3> points;
+    const std::array<double, 3> zs{5850., 6272.2, 6880.};
+    for (std::size_t i = 0; i < 3; ++i) {
+      points[i]           = point({0., 0., zs[i]}, i);
+      points[i].time      = (zs[i] - zs[0]) * inverseBeta;
+      points[i].timeError = error * ns;
+    }
+    return points;
+  };
+  auto massOf = [&](double mass, double p) { return std::hypot(p, mass) / p; };
+
+  // The fit recovers 1/beta, here that of a 1.5 GeV proton, with an error of about 1.3 %
+  const auto proton = hits(massOf(0.938272, 1.5));
+  const auto fit    = inverseBeta(cfg, proton[0], proton[1], proton[2]);
+  CHECK(fit.value == Catch::Approx(massOf(0.938272, 1.5)).epsilon(1e-9));
+  CHECK(fit.error == Catch::Approx(0.013).epsilon(0.15));
+
+  // A 1.5 GeV proton and pion are told apart
+  CHECK(massHypothesis(cfg, proton[0], proton[1], proton[2], 1. / 1.5) == 2212);
+  const auto pion = hits(massOf(0.13957, 1.5));
+  CHECK(massHypothesis(cfg, pion[0], pion[1], pion[2], 1. / 1.5) == 211);
+  // At 20 GeV they cannot be, and the seed stays a proton
+  const auto fastPion = hits(massOf(0.13957, 20.));
+  CHECK(massHypothesis(cfg, fastPion[0], fastPion[1], fastPion[2], -1. / 20.) == 2212);
+  // With hit time errors of several ns, or with the option off, there is no hypothesis
+  const auto slowHits = hits(massOf(0.13957, 1.5), 8.);
+  CHECK(massHypothesis(cfg, slowHits[0], slowHits[1], slowHits[2], 1. / 1.5) == 0);
+  auto off                 = cfg;
+  off.massFromTimeOfFlight = false;
+  CHECK(massHypothesis(off, pion[0], pion[1], pion[2], 1. / 1.5) == 0);
+
+  // The seed carries the hypothesis into its parameters
+  const auto gctx = geometryContext();
+  std::vector<Point> points;
+  edm4eic::TrackerHitCollection hitCollection;
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto position = helix(kStationZ.at(i), 1., 1.5);
+    addHit(hitCollection, position);
+    auto p = point(position, i);
+    p.time = (position - helix(kStationZ[0], 1., 1.5)).norm() * massOf(0.938272, 1.5);
+    points.push_back(p);
+  }
+  const auto seed = makeSeed(cfg, gctx, points[0], points[1], points[2]);
+  REQUIRE(seed.has_value());
+  CHECK(seed->pdg == 2212);
+  edm4eic::TrackSeedCollection seeds;
+  edm4eic::TrackParametersCollection params;
+  writeSeed(*seed, Candidate{.residual = 0., .points = {&points[0], &points[1], &points[2]}},
+            hitCollection, seeds, params);
+  CHECK(params[0].getPdg() == 2212);
 }
 
 TEST_CASE("B0TripletSeeding keeps hits within the time window", "[B0TripletSeeding]") {

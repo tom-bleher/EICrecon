@@ -61,6 +61,7 @@
 #include <any>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -318,8 +319,28 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         perigee_pos.x * Acts::UnitConstants::mm, perigee_pos.y * Acts::UnitConstants::mm,
         perigee_pos.z * Acts::UnitConstants::mm));
 
+    // The particle hypothesis the seed carries (for example from the time of flight in the B0
+    // seeding), pions if it carries none
+    Acts::ParticleHypothesis hypothesis = Acts::ParticleHypothesis::pion();
+    switch (std::abs(track_parameter.getPdg())) {
+    case 11:
+      hypothesis = Acts::ParticleHypothesis::electron();
+      break;
+    case 13:
+      hypothesis = Acts::ParticleHypothesis::muon();
+      break;
+    case 321:
+      hypothesis = Acts::ParticleHypothesis::kaon();
+      break;
+    case 2212:
+      hypothesis = Acts::ParticleHypothesis::proton();
+      break;
+    default:
+      break;
+    }
+
     // Create parameters
-    acts_init_trk_params.emplace_back(pSurface, params, cov, Acts::ParticleHypothesis::pion());
+    acts_init_trk_params.emplace_back(pSurface, params, cov, hypothesis);
   }
 
   //// Construct a perigee surface as the target surface
