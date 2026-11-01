@@ -71,6 +71,15 @@ private:
                                              config().qOverPRelativeError, "relative error on q/p"};
   ParameterRef<double> m_timeError{this, "timeError", config().timeError,
                                    "error on the seed time, in ns"};
+  ParameterRef<bool> m_massFromTimeOfFlight{
+      this, "massFromTimeOfFlight", config().massFromTimeOfFlight,
+      "choose the proton or pion hypothesis of a seed from the times of its hits"};
+  ParameterRef<double> m_pionSigmas{
+      this, "pionSigmas", config().pionSigmas,
+      "a seed is a pion if its 1/beta is this many errors below that of a proton"};
+  ParameterRef<double> m_maxInverseBetaError{
+      this, "maxInverseBetaError", config().maxInverseBetaError,
+      "no hypothesis is written if the error on 1/beta exceeds this"};
 
 public:
   void Configure() {

@@ -54,12 +54,29 @@ struct FieldIntegral {
   double residualPerQOverP;
 };
 
-/// Seed parameters of a triplet and their diagonal prior, on a perigee surface at the anchor
+/// Seed parameters of a triplet and their diagonal prior, on a perigee surface at the anchor, and
+/// the PDG code of its particle hypothesis (0 for none)
 struct Seed {
   Acts::Vector3 anchor;
   Acts::BoundVector parameters;
   Acts::BoundVector errors;
+  int pdg = 0;
 };
+
+/// 1/beta of a triplet from a straight-line fit of the hit times against the path length along
+/// the chords, and its error from the hit time errors (at least timeErrorFloor each)
+struct InverseBeta {
+  double value;
+  double error;
+};
+InverseBeta inverseBeta(const B0TripletSeedingConfig& cfg, const Point& a, const Point& b,
+                        const Point& c);
+
+/// PDG code of the particle hypothesis of a triplet with the given q/p: 211 if its 1/beta lies
+/// pionSigmas errors or more below that of a proton, 2212 otherwise, 0 if the hypothesis is off
+/// or the timing too coarse
+int massHypothesis(const B0TripletSeedingConfig& cfg, const Point& a, const Point& b,
+                   const Point& c, double qOverP);
 
 /// Sorts the hits with a finite position and time by z and splits them into stations at gaps
 /// larger than stationGap

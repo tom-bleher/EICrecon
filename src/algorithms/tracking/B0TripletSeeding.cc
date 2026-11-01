@@ -296,6 +296,56 @@ namespace b0_triplet_seeding {
     return static_cast<std::size_t>(std::distance(candidates.begin(), end));
   }
 
+  InverseBeta inverseBeta(const B0TripletSeedingConfig& cfg, const Point& a, const Point& b,
+                          const Point& c) {
+    // Weighted least squares of t = t0 + s / beta; Acts measures time as a length, so the slope is
+    // 1/beta. The chords miss the arc length by about 1e-4 at 2 GeV, far below the time errors.
+    const std::array<const Point*, 3> points{&a, &b, &c};
+    const std::array<double, 3> path{0., (b.position - a.position).norm(),
+                                     (b.position - a.position).norm() +
+                                         (c.position - b.position).norm()};
+    const double floor = cfg.timeErrorFloor / edm4eic::unit::ns * Acts::UnitConstants::ns;
+    double sw          = 0.;
+    double ss          = 0.;
+    double st          = 0.;
+    std::array<double, 3> weight{};
+    for (std::size_t i = 0; i < 3; ++i) {
+      const double error = std::max(points[i]->timeError, floor);
+      weight[i]          = std::isfinite(error) ? 1. / (error * error) : 0.;
+      sw += weight[i];
+      ss += weight[i] * path[i];
+      st += weight[i] * points[i]->time;
+    }
+    if (!(sw > 0.)) {
+      return {.value = 1., .error = std::numeric_limits<double>::infinity()};
+    }
+    double sxx = 0.;
+    double sxy = 0.;
+    for (std::size_t i = 0; i < 3; ++i) {
+      sxx += weight[i] * (path[i] - ss / sw) * (path[i] - ss / sw);
+      sxy += weight[i] * (path[i] - ss / sw) * (points[i]->time - st / sw);
+    }
+    if (!(sxx > 0.)) {
+      return {.value = 1., .error = std::numeric_limits<double>::infinity()};
+    }
+    return {.value = sxy / sxx, .error = 1. / std::sqrt(sxx)};
+  }
+
+  int massHypothesis(const B0TripletSeedingConfig& cfg, const Point& a, const Point& b,
+                     const Point& c, double qOverP) {
+    if (!cfg.massFromTimeOfFlight) {
+      return 0;
+    }
+    const auto measured = inverseBeta(cfg, a, b, c);
+    if (!std::isfinite(measured.value) || !(measured.error <= cfg.maxInverseBetaError)) {
+      return 0;
+    }
+    constexpr double protonMass    = 0.938272 * Acts::UnitConstants::GeV;
+    const double momentum          = 1. / std::abs(qOverP);
+    const double protonInverseBeta = std::hypot(momentum, protonMass) / momentum;
+    return measured.value <= protonInverseBeta - cfg.pionSigmas * measured.error ? 211 : 2212;
+  }
+
   std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
                                const Point& a, const Point& b, const Point& c) {
     return makeSeed(cfg, gctx, a, b, c, b.field);
@@ -363,7 +413,10 @@ namespace b0_triplet_seeding {
     if (!errors.allFinite() || (errors.array() <= 0.).any()) {
       return std::nullopt;
     }
-    return Seed{.anchor = anchor, .parameters = *local, .errors = errors};
+    return Seed{.anchor     = anchor,
+                .parameters = *local,
+                .errors     = errors,
+                .pdg        = massHypothesis(cfg, a, b, c, freeParams[Acts::eFreeQOverP])};
   }
 
   void writeSeed(const Seed& seed, const Candidate& candidate,
@@ -373,6 +426,7 @@ namespace b0_triplet_seeding {
     const auto& parameter = seed.parameters;
     auto pars             = trackParams.create();
     pars.setType(-1); // type --> seed(-1)
+    pars.setPdg(seed.pdg);
     pars.setLoc({static_cast<float>(parameter[Acts::eBoundLoc0] / Acts::UnitConstants::mm *
                                     edm4eic::unit::mm),
                  static_cast<float>(parameter[Acts::eBoundLoc1] / Acts::UnitConstants::mm *
@@ -412,7 +466,7 @@ void B0TripletSeeding::init() {
     double value;
   };
   // The comparisons are written so that NaN values fail them too
-  const std::array<Named, 8> positive{{
+  const std::array<Named, 9> positive{{
       {.name = "stationGap", .value = m_cfg.stationGap},
       {.name = "maxResidual", .value = m_cfg.maxResidual},
       {.name = "minMomentum", .value = m_cfg.minMomentum},
@@ -421,6 +475,7 @@ void B0TripletSeeding::init() {
       {.name = "qOverPRelativeError", .value = m_cfg.qOverPRelativeError},
       {.name = "timeError", .value = m_cfg.timeError},
       {.name = "timeErrorFloor", .value = m_cfg.timeErrorFloor},
+      {.name = "maxInverseBetaError", .value = m_cfg.maxInverseBetaError},
   }};
   for (const auto& [name, value] : positive) {
     if (!(value > 0.)) {
@@ -428,12 +483,13 @@ void B0TripletSeeding::init() {
           fmt::format("B0TripletSeeding: {} must be positive, got {}", name, value));
     }
   }
-  const std::array<Named, 5> nonNegative{{
+  const std::array<Named, 6> nonNegative{{
       {.name = "anchorDistance", .value = m_cfg.anchorDistance},
       {.name = "fieldTermAllowance", .value = m_cfg.fieldTermAllowance},
       {.name = "timeWindowSigmas", .value = m_cfg.timeWindowSigmas},
       {.name = "timeWindowTolerance", .value = m_cfg.timeWindowTolerance},
       {.name = "slowParticleMass", .value = m_cfg.slowParticleMass},
+      {.name = "pionSigmas", .value = m_cfg.pionSigmas},
   }};
   for (const auto& [name, value] : nonNegative) {
     if (!(value >= 0.)) {
