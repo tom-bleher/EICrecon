@@ -15,6 +15,7 @@
 #include <podio/detail/Link.h>
 #include <deque>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -26,6 +27,8 @@
 #include "factories/tracking/ActsToTracks_factory.h"
 #include "factories/tracking/ActsTrackMerger_factory.h"
 #include "factories/tracking/AmbiguitySolver_factory.h"
+#include "algorithms/tracking/B0Seeding2.h"
+#include "factories/tracking/B0Seeding2_factory.h"
 #include "factories/tracking/B0TripletSeeding_factory.h"
 #include "factories/tracking/CKFTracking_factory.h"
 #include "factories/tracking/IterativeVertexFinder_factory.h"
@@ -491,9 +494,28 @@ void InitPlugin(JApplication* app) {
       },
       app));
 
-  app->Add(new JOmniFactoryGeneratorT<B0TripletSeeding_factory>(
-      "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
-      app));
+  // B0 seed finder: the Acts Seeding2 triplet seeder in a frame along the field at each middle
+  // hit (B0Seeding2), where this Acts build has it, or the dedicated triplet seeder
+  // (B0TripletSeeding). Both write B0TrackerSeeds with parameters under the same prefix, with the
+  // same hit-time window, seed parameters and prior.
+  std::string b0Seeding = B0Seeding2::available() ? "seeding2" : "triplet";
+  app->SetDefaultParameter("tracking:B0Seeding", b0Seeding,
+                           "B0 seed finder: seeding2 (Acts Seeding2, B0Seeding2) or triplet "
+                           "(B0TripletSeeding)");
+  if (b0Seeding == "seeding2") {
+    if (!B0Seeding2::available()) {
+      throw std::invalid_argument("tracking:B0Seeding=seeding2 needs Acts 45.3 to 46.x");
+    }
+    app->Add(new JOmniFactoryGeneratorT<B0Seeding2_factory>(
+        "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
+        app));
+  } else if (b0Seeding == "triplet") {
+    app->Add(new JOmniFactoryGeneratorT<B0TripletSeeding_factory>(
+        "B0TrackerSeeds", {"B0TrackerRecHits"}, {"B0TrackerSeeds", "B0TrackerSeedParameters"}, {},
+        app));
+  } else {
+    throw std::invalid_argument("tracking:B0Seeding must be seeding2 or triplet");
+  }
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTrajectories", {"B0TrackerSeeds", "B0TrackerMeasurements"},

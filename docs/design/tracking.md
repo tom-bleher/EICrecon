@@ -303,6 +303,13 @@ flowchart TB
 ## Full diagram for B0 track reconstruction
 
 The B0 tracker is a telescope of four stations inside the B0 magnet, so it has its own seeding.
+By default (`tracking:B0Seeding=seeding2`) `B0Seeding2` runs the Acts Seeding2 triplet seeder:
+for each middle hit the hits are rotated into a frame with z' along the field at that hit and x'
+along the ion beam, so that the stations are layers in r' and the dipole with its quadrupole
+gradient is locally a field along z'; the cuts that assume a beam line are opened up. It shares
+the hit-time window, the seed parameters and the prior described below with the dedicated triplet
+seeder, which `tracking:B0Seeding=triplet` selects (and which is used where the Acts build lacks
+Seeding2). Both give the same tracks; the Acts seeder makes about half as many fake seeds.
 `B0TripletSeeding` groups the B0 hits into stations by z and forms triplets of hits on three
 stations. It keeps a triplet if its middle hit lies within `maxResidual` of the chord of the outer
 two, measured along the local magnetic field, and estimates the track parameters from the three
