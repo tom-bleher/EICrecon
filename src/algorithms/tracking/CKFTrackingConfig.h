@@ -29,5 +29,19 @@ struct CKFTrackingConfig {
 
   /// Include the measurement time (in addition to loc0 and loc1) in the calibrated measurements
   bool useTime = false;
+
+  /// Extrapolate tracks to the perigee at the origin in two stages (see TrackExtrapolation.h):
+  /// from the first measurement backward to a plane across the beam at referencePlaneZ, with the
+  /// material of the tracking geometry, then from there to the perigee without material. Tracks
+  /// that cannot reach the perigee from the plane are kept on the plane. For a spectrometer far
+  /// from the interaction point, such as the B0 tracker. Off by default, which extrapolates with
+  /// Acts::extrapolateTrackToReferenceSurface.
+  bool twoStageExtrapolation = false;
+  double referencePlaneZ     = 0.;
+  /// Tolerance on reaching the perigee in stage 2. The Acts default (1e-4) makes a perigee line
+  /// unreachable for tracks within about 10 mrad of it.
+  double perigeeSurfaceTolerance = 1e-6 * Acts::UnitConstants::mm;
+  /// Path limit of stage 2
+  double maxExtrapolationPath = 20. * Acts::UnitConstants::m;
 };
 } // namespace eicrecon

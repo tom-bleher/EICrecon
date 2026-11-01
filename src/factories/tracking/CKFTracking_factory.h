@@ -44,6 +44,12 @@ private:
   ParameterRef<double> m_maxQOverPVariance{
       this, "MaxQOverPVariance", config().maxQOverPVariance,
       "Drop a CKF branch once its filtered variance of q/p exceeds this"};
+  ParameterRef<bool> m_twoStageExtrapolation{
+      this, "TwoStageExtrapolation", config().twoStageExtrapolation,
+      "extrapolate to the perigee via a plane at ReferencePlaneZ (for the B0 tracker)"};
+  ParameterRef<double> m_referencePlaneZ{
+      this, "ReferencePlaneZ", config().referencePlaneZ,
+      "z of the plane of the two-stage extrapolation, in Acts units (mm)"};
   ParameterRef<bool> m_useTime{this, "UseTime", config().useTime,
                                "Include measurement time in the ACTS CKF measurement calibration"};
 

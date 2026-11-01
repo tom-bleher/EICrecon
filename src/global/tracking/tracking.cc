@@ -439,6 +439,11 @@ void InitPlugin(JApplication* app) {
       },
       {
           .numMeasurementsMin = 3,
+          // The B0 tracker sits 6 m downstream inside its dipole: extrapolate via a plane just
+          // upstream of the B0 exit window and magnet, and keep tracks there that cannot reach the
+          // perigee
+          .twoStageExtrapolation = true,
+          .referencePlaneZ       = 5790. * Acts::UnitConstants::mm,
       },
       app));
 
@@ -504,6 +509,11 @@ void InitPlugin(JApplication* app) {
       {
           // A seed has three hits, and a track crossing three of the four stations no more
           .numMeasurementsMin = 3,
+          // The B0 tracker sits 6 m downstream inside its dipole: extrapolate via a plane just
+          // upstream of the B0 exit window and magnet, and keep tracks there that cannot reach the
+          // perigee
+          .twoStageExtrapolation = true,
+          .referencePlaneZ       = 5790. * Acts::UnitConstants::mm,
       },
       app));
 
