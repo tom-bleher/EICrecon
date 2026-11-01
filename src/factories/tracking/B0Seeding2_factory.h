@@ -62,6 +62,15 @@ private:
                                              "relative q/p error floor"};
   ParameterRef<double> m_timeError{this, "timeError", config().triplet.timeError,
                                    "seed time error, ns"};
+  ParameterRef<bool> m_massFromTimeOfFlight{
+      this, "massFromTimeOfFlight", config().triplet.massFromTimeOfFlight,
+      "choose the proton or pion hypothesis of a seed from the times of its hits"};
+  ParameterRef<double> m_pionSigmas{
+      this, "pionSigmas", config().triplet.pionSigmas,
+      "a seed is a pion if its 1/beta is this many errors below that of a proton"};
+  ParameterRef<double> m_maxInverseBetaError{
+      this, "maxInverseBetaError", config().triplet.maxInverseBetaError,
+      "no hypothesis is written if the error on 1/beta exceeds this"};
 
   // Seeding2
   ParameterRef<std::string> m_fieldModel{this, "fieldModel", config().fieldModel,
