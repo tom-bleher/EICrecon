@@ -118,11 +118,84 @@ namespace b0_triplet_seeding {
     return failed;
   }
 
-  double chordResidual(const Point& a, const Point& b, const Point& c) {
+  double signedChordResidual(const Point& a, const Point& b, const Point& c) {
     const Acts::Vector3 chord = c.position - a.position;
     const double fraction     = (b.position.z() - a.position.z()) / chord.z();
-    return std::abs((b.position - a.position - fraction * chord).dot(b.fieldDirection));
+    return (b.position - a.position - fraction * chord).dot(b.fieldDirection);
   }
+
+  double chordResidual(const Point& a, const Point& b, const Point& c) {
+    return std::abs(signedChordResidual(a, b, c));
+  }
+
+  FieldIntegral fieldIntegral(const Point& a, const Point& b, const Point& c, std::size_t samples,
+                              const FieldLookup& fieldAt) {
+    const double za     = a.position.z();
+    const double zb     = b.position.z();
+    const double zc     = c.position.z();
+    const double length = zc - za;
+    // The Green's function below has a kink at the middle hit, so the samples are placed on each
+    // side of it separately: each segment is split into intervals with two Gauss-Legendre points
+    // each, exact for an integrand cubic in z. A midpoint rule across the kink is off by a few %.
+    const std::size_t intervals = std::max<std::size_t>(1, (samples + 3) / 4);
+    const double node           = 0.5 / std::sqrt(3.);
+    Acts::Vector3 weightedField = Acts::Vector3::Zero();
+    double weights              = 0.;
+    double residualPerQOverP    = 0.;
+    for (const auto& [lower, upper] : {std::pair{za, zb}, std::pair{zb, zc}}) {
+      const double width = (upper - lower) / static_cast<double>(intervals);
+      for (std::size_t i = 0; i < intervals; ++i) {
+        const double centre = lower + (static_cast<double>(i) + 0.5) * width;
+        for (const double z : {centre - node * width, centre + node * width}) {
+          // The parabola through the hits, x(z) = sum of hit * Lagrange basis, and its slope
+          const std::array<double, 3> basis{(z - zb) * (z - zc) / ((za - zb) * (za - zc)),
+                                            (z - za) * (z - zc) / ((zb - za) * (zb - zc)),
+                                            (z - za) * (z - zb) / ((zc - za) * (zc - zb))};
+          const std::array<double, 3> slope{(2. * z - zb - zc) / ((za - zb) * (za - zc)),
+                                            (2. * z - za - zc) / ((zb - za) * (zb - zc)),
+                                            (2. * z - za - zb) / ((zc - za) * (zc - zb))};
+          const Acts::Vector3 position =
+              basis[0] * a.position + basis[1] * b.position + basis[2] * c.position;
+          const Acts::Vector3 direction =
+              (slope[0] * a.position + slope[1] * b.position + slope[2] * c.position).normalized();
+          // Green's function of the middle hit in z: a curvature d2x/dz2 = g at z moves the
+          // middle hit off the chord by -g times this weight per unit length in z
+          const double weight =
+              (z <= zb ? (z - za) * (zc - zb) / length : (zb - za) * (zc - z) / length) * 0.5 *
+              width;
+          const Acts::Vector3 field = fieldAt(position);
+          weightedField += weight * field;
+          weights += weight;
+          // The curvature per unit q/p is d2r/ds2 = direction x field in Acts units. The weight
+          // is a Green's function in z, so convert it to d2r/dz2: divide by t_z^2 and drop the
+          // part along the track, which only changes dz/ds. For a 2 GeV track with slopes of up
+          // to 0.23 this changes the predicted residual by up to 0.11 mm (8 % of it).
+          const Acts::Vector3 bend = direction.cross(field);
+          const Acts::Vector3 curvature =
+              (bend - direction * (bend.z() / direction.z())) / (direction.z() * direction.z());
+          residualPerQOverP -= weight * curvature.dot(b.fieldDirection);
+        }
+      }
+    }
+    if (!(weights > 0.) || weightedField.isZero()) {
+      return {.field = b.field, .residualPerQOverP = 0.};
+    }
+    return {.field = weightedField / weights, .residualPerQOverP = residualPerQOverP};
+  }
+
+  namespace {
+    Acts::FreeVector estimateParameters(const Point& a, const Point& b, const Point& c,
+                                        const Acts::Vector3& field) {
+#if Acts_VERSION_MAJOR > 45 || (Acts_VERSION_MAJOR == 45 && Acts_VERSION_MINOR >= 2)
+      return Acts::estimateTrackParamsFromSeed(a.position, a.time, b.position, c.position, field);
+#else
+      Acts::FreeVector freeParams =
+          Acts::estimateTrackParamsFromSeed(a.position, b.position, c.position, field);
+      freeParams[Acts::eFreeTime] = a.time;
+      return freeParams;
+#endif
+    }
+  } // namespace
 
   bool inTimeWindow(const B0TripletSeedingConfig& cfg, const Point& first, const Point& later) {
     if (!(cfg.timeWindowSigmas > 0.)) {
@@ -147,11 +220,15 @@ namespace b0_triplet_seeding {
   }
 
   std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
-                                        const std::vector<std::vector<Point>>& stations) {
-    // Triplets of hits on three stations. In a uniform field the middle hit of a
-    // forward track lies close to the chord of the outer two along the field. The
-    // quadrupole component of the B0 magnet breaks this off its midplane, so a
-    // soft track whose triplet skips a station can exceed maxResidual.
+                                        const std::vector<std::vector<Point>>& stations,
+                                        const FieldLookup& fieldAt) {
+    // Triplets of hits on three stations. In a uniform field the middle hit of a forward track
+    // lies close to the chord of the outer two along the field. The quadrupole component of the
+    // B0 magnet breaks this off its midplane: the field turns along the track, so a soft track
+    // whose triplet skips a station has a residual of up to a few mm. The field integral predicts
+    // that term, and it is subtracted before the cut.
+    const bool integrate   = cfg.fieldSamples > 0 && fieldAt;
+    const double prefilter = cfg.maxResidual + (integrate ? cfg.fieldTermAllowance : 0.);
     std::vector<Candidate> candidates;
     for (std::size_t i = 0; i < stations.size(); ++i) {
       for (std::size_t j = i + 1; j < stations.size(); ++j) {
@@ -165,9 +242,24 @@ namespace b0_triplet_seeding {
                 if (!inTimeWindow(cfg, b, c) || !inTimeWindow(cfg, a, c)) {
                   continue;
                 }
-                const double residual = chordResidual(a, b, c);
+                const double rawResidual = signedChordResidual(a, b, c);
+                if (!(std::abs(rawResidual) < prefilter)) {
+                  continue;
+                }
+                const auto integral =
+                    integrate ? fieldIntegral(a, b, c, cfg.fieldSamples, fieldAt)
+                              : FieldIntegral{.field = b.field, .residualPerQOverP = 0.};
+                const double qOverP =
+                    estimateParameters(a, b, c, integral.field)[Acts::eFreeQOverP];
+                if (!std::isfinite(qOverP) || std::abs(qOverP) * cfg.minMomentum > 1.) {
+                  continue;
+                }
+                const double residual = std::abs(rawResidual - qOverP * integral.residualPerQOverP);
                 if (residual < cfg.maxResidual) {
-                  candidates.push_back({residual, {&a, &b, &c}});
+                  candidates.push_back({.residual = residual,
+                                        .points   = {&a, &b, &c},
+                                        .field    = integral.field,
+                                        .qOverP   = qOverP});
                 }
               }
             }
@@ -206,15 +298,13 @@ namespace b0_triplet_seeding {
 
   std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
                                const Point& a, const Point& b, const Point& c) {
-    const Acts::Vector3& bField = b.field;
-#if Acts_VERSION_MAJOR > 45 || (Acts_VERSION_MAJOR == 45 && Acts_VERSION_MINOR >= 2)
-    Acts::FreeVector freeParams =
-        Acts::estimateTrackParamsFromSeed(a.position, a.time, b.position, c.position, bField);
-#else
-    Acts::FreeVector freeParams =
-        Acts::estimateTrackParamsFromSeed(a.position, b.position, c.position, bField);
-    freeParams[Acts::eFreeTime] = a.time;
-#endif
+    return makeSeed(cfg, gctx, a, b, c, b.field);
+  }
+
+  std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
+                               const Point& a, const Point& b, const Point& c,
+                               const Acts::Vector3& bField) {
+    Acts::FreeVector freeParams = estimateParameters(a, b, c, bField);
     if (!freeParams.allFinite() || std::abs(freeParams[Acts::eFreeQOverP]) * cfg.minMomentum > 1.) {
       return std::nullopt;
     }
@@ -222,8 +312,8 @@ namespace b0_triplet_seeding {
     // A relative q/p error vanishes for a straight triplet. The three hits
     // resolve the curvature only up to their sagitta error over the lever arms
     // across the field, and |q/p| = curvature * sin(angle to field) / |B|.
-    const Acts::Vector3& fieldDirection = b.fieldDirection;
-    auto across                         = [&](const Acts::Vector3& v) {
+    const Acts::Vector3 fieldDirection = bField.normalized();
+    auto across                        = [&](const Acts::Vector3& v) {
       return (v - v.dot(fieldDirection) * fieldDirection).norm();
     };
     const double d1 = across(b.position - a.position);
@@ -338,8 +428,9 @@ void B0TripletSeeding::init() {
           fmt::format("B0TripletSeeding: {} must be positive, got {}", name, value));
     }
   }
-  const std::array<Named, 4> nonNegative{{
+  const std::array<Named, 5> nonNegative{{
       {.name = "anchorDistance", .value = m_cfg.anchorDistance},
+      {.name = "fieldTermAllowance", .value = m_cfg.fieldTermAllowance},
       {.name = "timeWindowSigmas", .value = m_cfg.timeWindowSigmas},
       {.name = "timeWindowTolerance", .value = m_cfg.timeWindowTolerance},
       {.name = "slowParticleMass", .value = m_cfg.slowParticleMass},
@@ -386,7 +477,12 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
     }
   }
 
-  auto candidates = findCandidates(m_cfg, stations);
+  // The field along the triplets, from the same cache
+  const FieldLookup fieldAt = [&](const Acts::Vector3& position) -> Acts::Vector3 {
+    const auto value = field->getField(position, fieldCache);
+    return value.ok() ? *value : Acts::Vector3::Zero();
+  };
+  auto candidates = findCandidates(m_cfg, stations, fieldAt);
   // A track crossing all stations gives one candidate per station triple, and all of them are kept.
   // The track finding does not succeed from every seed of a track, so keeping only the best one
   // per track loses tracks; the ambiguity solver removes the duplicate tracks instead.
@@ -395,7 +491,7 @@ void B0TripletSeeding::process(const Input& input, const Output& output) const {
   const auto& hitsIn        = *hits;
   const std::size_t dropped = selectSeeds(m_cfg, candidates, [&](const Candidate& candidate) {
     const auto& [a, b, c] = candidate.points;
-    const auto seed       = makeSeed(m_cfg, gctx, *a, *b, *c);
+    const auto seed       = makeSeed(m_cfg, gctx, *a, *b, *c, candidate.field);
     if (seed) {
       writeSeed(*seed, candidate, hitsIn, seedsOut, paramsOut);
     }

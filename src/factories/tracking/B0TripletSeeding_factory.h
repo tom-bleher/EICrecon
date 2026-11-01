@@ -57,6 +57,12 @@ private:
   ParameterRef<double> m_slowParticleMass{
       this, "slowParticleMass", config().slowParticleMass,
       "mass per unit charge of the slowest particles to seed, in Acts units (GeV)"};
+  ParameterRef<std::size_t> m_fieldSamples{
+      this, "fieldSamples", config().fieldSamples,
+      "field samples along a triplet for its effective field, 0 for the field at the middle hit"};
+  ParameterRef<double> m_fieldTermAllowance{
+      this, "fieldTermAllowance", config().fieldTermAllowance,
+      "extra raw residual admitted before the field term is subtracted, in Acts units (mm)"};
   ParameterRef<double> m_positionError{this, "positionError", config().positionError,
                                        "error on the seed position, in Acts units (mm)"};
   ParameterRef<double> m_angleError{this, "angleError", config().angleError,

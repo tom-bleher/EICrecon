@@ -15,7 +15,8 @@ struct B0TripletSeedingConfig {
   /// station spacing (at least 270 mm).
   double stationGap = 50. * Acts::UnitConstants::mm;
   /// Maximum distance of the middle hit from the chord of the outer two,
-  /// measured along the local magnetic field
+  /// measured along the local magnetic field, after subtracting the part that
+  /// the field integral predicts (see fieldSamples)
   double maxResidual = 1. * Acts::UnitConstants::mm;
   /// Minimum momentum of the three-hit estimate
   double minMomentum = 1. * Acts::UnitConstants::GeV;
@@ -43,6 +44,20 @@ struct B0TripletSeedingConfig {
   /// for nuclear fragments set the mass per unit charge: about 1.876 GeV for deuterons, alpha
   /// particles and carbon nuclei.
   double slowParticleMass = 0.938272 * Acts::UnitConstants::GeV;
+
+  /// Number of points at which the field is sampled between the outer hits of a triplet. The
+  /// field changes along the track (the B0 magnet has a quadrupole gradient and is not aligned
+  /// with the ion beam), so the field at the middle hit biases the momentum by up to 5 % for
+  /// triplets that skip a station, and the chord residual picks up a term from the change of the
+  /// field direction. The samples, on the parabola through the hits and weighted by their effect
+  /// on the middle hit, give the effective field for the momentum and the predicted residual,
+  /// which is subtracted. They are two Gauss-Legendre points per interval on each side of the
+  /// middle hit, so the number is rounded up to a multiple of 4; 4 agrees with 400 to 2 um in the
+  /// B0 field. 0 uses the field at the middle hit only.
+  std::size_t fieldSamples = 4;
+  /// With fieldSamples, triplets are first kept if their raw residual is below maxResidual plus
+  /// this, to admit tracks whose raw residual is mostly the predicted field term
+  double fieldTermAllowance = 2. * Acts::UnitConstants::mm;
 
   /// Prior uncertainties of the seed parameters. The prior is a deliberately loose diagonal
   /// envelope, not an error estimate: the track finder refits from it, so it only has to cover

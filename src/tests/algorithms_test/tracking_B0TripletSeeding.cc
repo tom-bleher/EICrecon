@@ -22,6 +22,7 @@
 #include <edm4hep/Vector3f.h>
 #include <podio/RelationRange.h>
 #include <Eigen/Core>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -100,6 +101,71 @@ public:
 private:
   double m_maxZ;
 };
+
+/// The B0 magnet as in DD4hep: a dipole along +y plus a quadrupole gradient, about an axis at
+/// x = -145.8 mm, between z = 5800 and 7000 mm (as for epic main and the realistic B0 tracker)
+class B0MultipoleField final : public Acts::MagneticFieldProvider {
+public:
+  Cache makeCache(const Acts::MagneticFieldContext& /* mctx */) const override {
+    return Cache(std::in_place_type<int>, 0);
+  }
+  Acts::Result<Acts::Vector3> getField(const Acts::Vector3& position,
+                                       Cache& /* cache */) const override {
+    return Acts::Result<Acts::Vector3>::success(at(position));
+  }
+  static Acts::Vector3 at(const Acts::Vector3& position) {
+    constexpr double dipole   = 1.18405 * Acts::UnitConstants::T;
+    constexpr double gradient = -8.1224 * Acts::UnitConstants::T / Acts::UnitConstants::m;
+    constexpr double axisX    = -145.779;
+    if (position.z() < 5800. || position.z() > 7000.) {
+      return Acts::Vector3::Zero();
+    }
+    return {gradient * position.y(), dipole + gradient * (position.x() - axisX), 0.};
+  }
+};
+
+/// Positions at the given z planes of a track of charge q and momentum p from a start position
+/// and direction, integrated through B0MultipoleField with a fourth-order Runge-Kutta-Nystroem
+/// stepper (as Acts::EigenStepper). The steps are shortened to end on every plane and on the
+/// field edges, so that no step straddles the jump of the field or has to be stepped back: a
+/// straight step back keeps the direction of the overshoot, a kink of up to 1e-4 at 2 GeV, and
+/// an edge inside a step integrates the field wrongly. Agrees with an adaptive 8th-order
+/// integrator to 1.2 um.
+std::vector<Acts::Vector3> track(double q, double p, Acts::Vector3 position,
+                                 Acts::Vector3 direction, const std::vector<double>& planes) {
+  const double qOverP = q / p;
+  auto derivative     = [&](const Acts::Vector3& t, const Acts::Vector3& r) -> Acts::Vector3 {
+    return qOverP * t.cross(B0MultipoleField::at(r));
+  };
+  std::vector<double> stops = planes;
+  for (const double edge : {5800., 7000.}) {
+    if (edge > position.z()) {
+      stops.push_back(edge);
+    }
+  }
+  std::ranges::sort(stops);
+  std::vector<Acts::Vector3> crossings;
+  const double maxStep = 0.5 * Acts::UnitConstants::mm;
+  direction.normalize();
+  for (const double stop : stops) {
+    while (stop - position.z() > 1e-9 * Acts::UnitConstants::mm) {
+      const double h         = std::min(maxStep, (stop - position.z()) / direction.z());
+      const Acts::Vector3 r0 = position;
+      const Acts::Vector3 t0 = direction;
+      const Acts::Vector3 k1 = derivative(t0, r0);
+      const Acts::Vector3 rm = r0 + 0.5 * h * t0 + h * h / 8. * k1;
+      const Acts::Vector3 k2 = derivative(t0 + 0.5 * h * k1, rm);
+      const Acts::Vector3 k3 = derivative(t0 + 0.5 * h * k2, rm);
+      const Acts::Vector3 k4 = derivative(t0 + h * k3, r0 + h * t0 + 0.5 * h * h * k3);
+      position               = r0 + h * t0 + h * h / 6. * (k1 + k2 + k3);
+      direction              = (t0 + h / 6. * (k1 + 2. * k2 + 2. * k3 + k4)).normalized();
+    }
+    if (std::ranges::find(planes, stop) != planes.end()) {
+      crossings.push_back(position);
+    }
+  }
+  return crossings;
+}
 
 } // namespace
 
@@ -293,6 +359,11 @@ TEST_CASE("B0TripletSeeding rejects an invalid configuration", "[B0TripletSeedin
   algo.applyConfig(cfg);
   CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("timeWindowSigmas"));
 
+  cfg                    = B0TripletSeedingConfig{};
+  cfg.fieldTermAllowance = -1.;
+  algo.applyConfig(cfg);
+  CHECK_THROWS_WITH(algo.init(), Catch::Matchers::ContainsSubstring("fieldTermAllowance"));
+
   cfg                = B0TripletSeedingConfig{};
   cfg.timeErrorFloor = 0.;
   algo.applyConfig(cfg);
@@ -328,6 +399,103 @@ TEST_CASE("B0TripletSeeding keeps triplets within maxResidual", "[B0TripletSeedi
     }
   }
   CHECK(findCandidates(cfg, stations).empty());
+}
+
+TEST_CASE("B0TripletSeeding corrects for the field change along the triplet",
+          "[B0TripletSeeding]") {
+  const auto gctx = geometryContext();
+  B0TripletSeedingConfig cfg;
+  const FieldLookup fieldAt = [](const Acts::Vector3& r) { return B0MultipoleField::at(r); };
+  // Stations of the realistic B0 tracker. A 2 GeV track 80 mm above the magnet midplane, from
+  // upstream of the field along the ion beam (-25 mrad in x), where the quadrupole term is large.
+  const std::vector<double> planes{5850., 6272.2, 6601., 6880.};
+  for (const double q : {+1., -1.}) {
+    const double p  = 2. * Acts::UnitConstants::GeV;
+    const auto hits = track(q, p, {-130., 80., 5700.}, {-0.025, 0., 1.}, planes);
+    auto pointAt    = [&](std::size_t i) {
+      auto point           = eicrecon::b0_triplet_seeding::Point{};
+      point.position       = hits.at(i);
+      point.field          = B0MultipoleField::at(hits.at(i));
+      point.fieldDirection = point.field.normalized();
+      point.time           = hits.at(i).norm();
+      point.variance       = 1e-4;
+      point.index          = i;
+      return point;
+    };
+    // Every station triple: 123, 124, 134, 234
+    for (const auto& [i, j, k] :
+         std::vector<std::array<std::size_t, 3>>{{0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3}}) {
+      CAPTURE(q, i, j, k);
+      const auto a        = pointAt(i);
+      const auto b        = pointAt(j);
+      const auto c        = pointAt(k);
+      const auto integral = fieldIntegral(a, b, c, cfg.fieldSamples, fieldAt);
+      const auto plain    = makeSeed(cfg, gctx, a, b, c);
+      const auto seed     = makeSeed(cfg, gctx, a, b, c, integral.field);
+      REQUIRE(plain.has_value());
+      REQUIRE(seed.has_value());
+      const double qOverP    = q / p;
+      const double plainBias = plain->parameters[Acts::eBoundQOverP] / qOverP - 1.;
+      const double bias      = seed->parameters[Acts::eBoundQOverP] / qOverP - 1.;
+      CAPTURE(plainBias, bias);
+      // The effective field removes most of the momentum bias of the field at the middle hit, up
+      // to 8 % here. What is left, up to 0.8 % (134, q = +1), comes from sampling the field on the
+      // parabola through the hits, which is off the true path by up to a few mm in this gradient
+      // (with the field on the true path it is 0.16 %). It is far below the 25 % prior on q/p and
+      // below the 1.2-1.9 % spread of the q/p of real triplets from multiple scattering. Where the
+      // field at the middle hit is already good (q = -1 bends towards the magnet axis), the bias
+      // can be larger than with it, so the improvement is only required where there is one.
+      CHECK(std::abs(bias) < 0.01);
+      if (std::abs(plainBias) > 0.01) {
+        CHECK(std::abs(bias) < 0.2 * std::abs(plainBias));
+      }
+      // The predicted residual removes the field term from the chord residual, up to 1.8 mm here,
+      // to within 0.03 mm. The same parabola leaves up to 0.021 mm (124, q = +1; 0.002 mm with
+      // the true path), below the 0.025 mm that the 20 um hit resolution gives the chord residual.
+      const double raw = signedChordResidual(a, b, c);
+      const double corrected =
+          raw - seed->parameters[Acts::eBoundQOverP] * integral.residualPerQOverP;
+      CAPTURE(raw, corrected);
+      CHECK(std::abs(corrected) < 0.03 * Acts::UnitConstants::mm);
+      CHECK(std::abs(corrected) < std::abs(raw));
+    }
+  }
+
+  // Without the field lookup, or with fieldSamples = 0, the field at the middle hit is used
+  std::vector<std::vector<Point>> stations;
+  const auto hits = track(1., 2., {-130., 80., 5700.}, {-0.025, 0., 1.}, planes);
+  for (std::size_t i = 0; i < hits.size(); ++i) {
+    auto point           = Point{};
+    point.position       = hits[i];
+    point.field          = B0MultipoleField::at(hits[i]);
+    point.fieldDirection = point.field.normalized();
+    point.time           = hits[i].norm();
+    point.variance       = 1e-4;
+    point.index          = i;
+    stations.push_back({point});
+  }
+  // With the correction all four triplets pass maxResidual, with residuals below the hit
+  // resolution. Without it the triplets that skip a station, 124 and 134 (raw 1.5 and 1.7 mm),
+  // fail, and the adjacent ones, 123 and 234, have larger residuals.
+  const auto corrected = findCandidates(cfg, stations, fieldAt);
+  REQUIRE(corrected.size() == 4);
+  auto off         = cfg;
+  off.fieldSamples = 0;
+  const auto plain = findCandidates(off, stations, fieldAt);
+  REQUIRE(plain.size() == 2);
+  for (const auto& candidate : plain) {
+    CHECK(candidate.field.isApprox(candidate.points[1]->field));
+    CHECK(candidate.points[2]->index - candidate.points[0]->index == 2);
+  }
+  for (const auto& candidate : corrected) {
+    CAPTURE(candidate.points[0]->index, candidate.points[1]->index, candidate.points[2]->index);
+    CHECK(candidate.residual < 0.03 * Acts::UnitConstants::mm);
+    for (const auto& other : plain) {
+      if (other.points == candidate.points) {
+        CHECK(candidate.residual < other.residual);
+      }
+    }
+  }
 }
 
 TEST_CASE("B0TripletSeeding keeps hits within the time window", "[B0TripletSeeding]") {

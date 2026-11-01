@@ -35,10 +35,23 @@ struct Point {
   double timeError = 0.;
 };
 
-/// A triplet of hits on three stations and the distance of its middle hit from the chord
+/// A triplet of hits on three stations, the distance of its middle hit from the chord, the
+/// effective magnetic field and the q/p estimated in it
 struct Candidate {
   double residual;
   std::array<const Point*, 3> points;
+  Acts::Vector3 field = Acts::Vector3::Zero();
+  double qOverP       = 0.;
+};
+
+/// The magnetic field at a position, zero if the lookup fails
+using FieldLookup = std::function<Acts::Vector3(const Acts::Vector3&)>;
+
+/// Effective field of a triplet, and the residual that the field change along it predicts per
+/// unit q/p
+struct FieldIntegral {
+  Acts::Vector3 field;
+  double residualPerQOverP;
 };
 
 /// Seed parameters of a triplet and their diagonal prior, on a perigee surface at the anchor
@@ -59,18 +72,32 @@ std::size_t lookUpField(std::vector<std::vector<Point>>& stations,
                         const Acts::MagneticFieldProvider& field,
                         Acts::MagneticFieldProvider::Cache& fieldCache);
 
-/// Distance of the middle hit from the chord of the outer two, along the field at the middle hit
+/// Signed distance of the middle hit from the chord of the outer two, along the field at the
+/// middle hit, and its magnitude
+double signedChordResidual(const Point& a, const Point& b, const Point& c);
 double chordResidual(const Point& a, const Point& b, const Point& c);
+
+/// Samples the field on the parabola through the three hits, at two Gauss-Legendre points in each
+/// of (samples + 3) / 4 intervals on either side of the middle hit, and weights each by its effect
+/// on the position of the middle hit relative to the chord (a triangle in z, zero at the outer
+/// hits). The weighted mean is the effective field. The curvature d2r/dz2 it causes along the
+/// field at the middle hit, integrated with the same weights, predicts the chord residual. Falls
+/// back to the field at the middle hit if all samples are zero.
+FieldIntegral fieldIntegral(const Point& a, const Point& b, const Point& c, std::size_t samples,
+                            const FieldLookup& fieldAt);
 
 /// Whether the later hit can follow the first one in time: it may lag by up to the flight time
 /// of the slowest seeded particle over their distance and may not be early, both within the time
 /// window tolerance. Always true when the window is off.
 bool inTimeWindow(const B0TripletSeedingConfig& cfg, const Point& first, const Point& later);
 
-/// All triplets of hits on three different stations, in time with each other, whose middle hit
-/// lies within maxResidual of the chord of the outer two, in no particular order
+/// All triplets of hits on three different stations, in time with each other, with an estimated
+/// momentum of at least minMomentum, whose middle hit lies within maxResidual of the chord of the
+/// outer two after subtracting the predicted field term, in no particular order. Without a field
+/// lookup, or with fieldSamples = 0, the field at the middle hit is used and nothing is subtracted.
 std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
-                                      const std::vector<std::vector<Point>>& stations);
+                                      const std::vector<std::vector<Point>>& stations,
+                                      const FieldLookup& fieldAt = {});
 
 /// Passes the candidates to makeSeed in order of increasing residual, ties broken by the hit
 /// indices, until makeSeed has returned true maxSeeds times. Only the candidates that are reached
@@ -78,8 +105,11 @@ std::vector<Candidate> findCandidates(const B0TripletSeedingConfig& cfg,
 std::size_t selectSeeds(const B0TripletSeedingConfig& cfg, std::vector<Candidate>& candidates,
                         const std::function<bool(const Candidate&)>& makeSeed);
 
-/// Seed parameters of a triplet in the field at its middle hit, if the triplet passes the
-/// momentum limit and its prior is positive definite
+/// Seed parameters of a triplet in a field, by default the one at its middle hit, if the triplet
+/// passes the momentum limit and its prior is positive definite
+std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
+                             const Point& a, const Point& b, const Point& c,
+                             const Acts::Vector3& field);
 std::optional<Seed> makeSeed(const B0TripletSeedingConfig& cfg, const Acts::GeometryContext& gctx,
                              const Point& a, const Point& b, const Point& c);
 
