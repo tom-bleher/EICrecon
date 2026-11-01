@@ -31,6 +31,9 @@
 #include <Acts/Propagator/Propagator.hpp>
 #include <Acts/Propagator/PropagatorOptions.hpp>
 #include <Acts/Propagator/StandardAborters.hpp>
+#include <Acts/Propagator/VoidNavigator.hpp>
+#include <Acts/Surfaces/CurvilinearSurface.hpp>
+#include <Acts/Surfaces/PlaneSurface.hpp>
 #include <Acts/Surfaces/PerigeeSurface.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/TrackFinding/CombinatorialKalmanFilterExtensions.hpp>
@@ -70,6 +73,7 @@
 // IWYU pragma: no_include <Acts/Utilities/detail/ContainerIterator.hpp>
 
 #include "ActsGeometryProvider.h"
+#include "TrackExtrapolation.h"
 #include "extensions/edm4eic/EDM4eicToActs.h"
 #include "extensions/spdlog/SpdlogFormatters.h" // IWYU pragma: keep
 #include "extensions/spdlog/SpdlogToActs.h"
@@ -374,6 +378,17 @@ void CKFTracking::process(const Input& input, const Output& output) const {
                             acts_logger().cloneWithSuffix("Propagator"));
   ExtrapolatorOptions extrapolationOptions(gctx, mctx);
 
+  // Stage 2 of the two-stage extrapolation: the field, but no navigation and so no material
+  using FreeExtrapolator = Acts::Propagator<Acts::EigenStepper<>, Acts::VoidNavigator>;
+  FreeExtrapolator freeExtrapolator(Acts::EigenStepper<>(m_BField), Acts::VoidNavigator(),
+                                    acts_logger().cloneWithSuffix("FreePropagator"));
+  FreeExtrapolator::Options<> freeExtrapolationOptions(gctx, mctx);
+  freeExtrapolationOptions.surfaceTolerance = m_cfg.perigeeSurfaceTolerance;
+  freeExtrapolationOptions.pathLimit        = m_cfg.maxExtrapolationPath;
+  const auto referencePlane =
+      Acts::CurvilinearSurface(Acts::Vector3{0., 0., m_cfg.referencePlaneZ}, Acts::Vector3::UnitZ())
+          .planeSurface();
+
   // Create track container
   auto trackContainer      = std::make_shared<Acts::VectorTrackContainer>();
   auto trackStateContainer = std::make_shared<Acts::VectorMultiTrajectory>();
@@ -427,14 +442,30 @@ void CKFTracking::process(const Input& input, const Output& output) const {
         continue;
       }
 
-      auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
-          track, *pSurface, extrapolator, extrapolationOptions,
-          Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
+      if (m_cfg.twoStageExtrapolation) {
+        auto extrapolationResult = extrapolateTrackInTwoStages(
+            track, *referencePlane, *pSurface, extrapolator, extrapolationOptions, freeExtrapolator,
+            freeExtrapolationOptions);
+        if (!extrapolationResult.ok()) {
+          debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
+                extrapolationResult.error().message());
+          continue;
+        }
+        if (*extrapolationResult == TwoStageExtrapolation::ReferencePlane) {
+          debug(
+              "Track {} for seed {} does not reach the perigee and is kept on the plane at z = {}",
+              track.index(), iseed, m_cfg.referencePlaneZ);
+        }
+      } else {
+        auto extrapolationResult = Acts::extrapolateTrackToReferenceSurface(
+            track, *pSurface, extrapolator, extrapolationOptions,
+            Acts::TrackExtrapolationStrategy::firstOrLast, acts_logger());
 
-      if (!extrapolationResult.ok()) {
-        debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
-              extrapolationResult.error().message());
-        continue;
+        if (!extrapolationResult.ok()) {
+          debug("Extrapolation for seed {} and track {} failed with error {}", iseed, track.index(),
+                extrapolationResult.error().message());
+          continue;
+        }
       }
 
       seedNumber(track) = iseed;
