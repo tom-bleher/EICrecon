@@ -3,14 +3,14 @@
 
 #pragma once
 
-#include <Acts/Definitions/Algebra.hpp>
+#include <Acts/MagneticField/MagneticFieldContext.hpp>
+#include <Acts/MagneticField/MagneticFieldProvider.hpp>
 #include <Acts/Seeding2/TripletSeeder.hpp>
 #include <algorithms/algorithm.h>
 #include <edm4eic/TrackParametersCollection.h>
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4eic/TrackerHitCollection.h>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 
@@ -40,12 +40,12 @@ public:
 
   void process(const Input& input, const Output& output) const final;
 
-  /// Adds the seed of three hits on a helix in the field at the middle one, unless they have no
-  /// finite non-zero q/p. Positions are in Acts units, the time in EDM4eic units.
-  static std::optional<edm4eic::MutableTrackSeed>
-  addSeed(const B0TrackSeedingConfig& cfg, const Acts::Vector3& first, const Acts::Vector3& middle,
-          const Acts::Vector3& last, const Acts::Vector3& field, float time,
-          edm4eic::TrackSeedCollection& seeds, edm4eic::TrackParametersCollection& parameters);
+  /// The seeds of the hits in a field
+  void findSeeds(const edm4eic::TrackerHitCollection& hits,
+                 const Acts::MagneticFieldProvider& fieldProvider,
+                 const Acts::MagneticFieldContext& fieldContext,
+                 edm4eic::TrackSeedCollection& seeds,
+                 edm4eic::TrackParametersCollection& parameters) const;
 
 private:
   const std::shared_ptr<const ActsGeometryProvider> m_geoSvc{
