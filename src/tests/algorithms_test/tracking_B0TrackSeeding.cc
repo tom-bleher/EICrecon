@@ -71,6 +71,13 @@ TEST_CASE("B0TrackSeeding recovers charge and momentum on a helix", "[B0TrackSee
           Catch::Approx(cfg.qOverPRelativeError * std::abs(seed->parameters[Acts::eBoundQOverP])));
     }
   }
+  // For a stiff track the q/p error is the resolution of the three hits, above the relative floor:
+  // stations 2-3-4 of the B0 tracker at 275 GeV
+  const auto stiff = B0TrackSeeding::makeSeed(
+      cfg, hit(helix(6272.2, 1., 275.)), hit(helix(6601., 1., 275.)), hit(helix(6880., 1., 275.)));
+  REQUIRE(stiff.has_value());
+  const double qOverP = std::abs(stiff->parameters[Acts::eBoundQOverP]);
+  CHECK(stiff->errors[Acts::eBoundQOverP] > cfg.qOverPRelativeError * qOverP);
 
   CHECK_FALSE(B0TrackSeeding::makeSeed(cfg, hit(helix(5900., 1., 0.5)), hit(helix(6270., 1., 0.5)),
                                        hit(helix(6880., 1., 0.5)))

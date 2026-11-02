@@ -39,7 +39,7 @@ struct B0TrackSeedingConfig {
   /// Seed prior: a loose diagonal envelope for the track finding
   double positionError = 0.1 * Acts::UnitConstants::mm;
   double angleError    = 2. * Acts::UnitConstants::mrad;
-  /// Relative q/p error
+  /// Relative q/p error, raised to the three-hit resolution of stiff tracks
   double qOverPRelativeError = 0.25;
   /// Seed time error, in EDM4eic units (ns)
   double timeError = 10. * edm4eic::unit::ns;

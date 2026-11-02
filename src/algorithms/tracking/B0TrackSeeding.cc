@@ -88,11 +88,24 @@ std::optional<B0TrackSeeding::Seed> B0TrackSeeding::makeSeed(const B0TrackSeedin
   parameters[Acts::eBoundTheta]  = theta;
   parameters[Acts::eBoundQOverP] = freeParams[Acts::eFreeQOverP];
   parameters[Acts::eBoundTime]   = freeParams[Acts::eFreeTime];
+  // q/p error floor from the sagitta error of the three hits across the field, with
+  // |q/p| = curvature * sin(angle to B) / |B|
+  const Acts::Vector3 fieldDirection = b.field.normalized();
+  auto across                        = [&](const Acts::Vector3& v) {
+    return (v - v.dot(fieldDirection) * fieldDirection).norm();
+  };
+  const double d1 = across(b.position - a.position);
+  const double d2 = across(c.position - b.position);
+  const double sagittaVariance =
+      b.variance + (d2 * d2 * a.variance + d1 * d1 * c.variance) / ((d1 + d2) * (d1 + d2));
+  const double qOverPResolution = 2. * std::sqrt(sagittaVariance) / (d1 * d2) *
+                                  direction.cross(fieldDirection).norm() / b.field.norm();
 
   Acts::BoundVector errors;
   errors << cfg.positionError, cfg.positionError / std::abs(std::tan(theta)),
       cfg.angleError / std::sin(theta), cfg.angleError,
-      cfg.qOverPRelativeError * std::abs(parameters[Acts::eBoundQOverP]),
+      std::max(cfg.qOverPRelativeError * std::abs(parameters[Acts::eBoundQOverP]),
+               qOverPResolution),
       cfg.timeError / edm4eic::unit::ns * Acts::UnitConstants::ns;
   if (!errors.allFinite() || (errors.array() <= 0.).any()) {
     return std::nullopt;
