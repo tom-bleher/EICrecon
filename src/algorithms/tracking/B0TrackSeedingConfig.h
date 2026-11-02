@@ -26,7 +26,9 @@ struct B0TrackSeedingConfig {
                                            .collisionRegionMax = noLimit};
   Acts::TripletSeedFinder::Config triplets{.minPt     = 1. * Acts::UnitConstants::GeV,
                                            .impactMax = noLimit};
-  Acts::BroadTripletSeedFilter::Config filter{.deltaRMin = stationGap, .impactWeightFactor = 0.F};
+  /// Up to maxSeedsPerSpM + 1 seeds per middle hit, preferring those with hits on more stations
+  Acts::BroadTripletSeedFilter::Config filter{
+      .deltaRMin = stationGap, .impactWeightFactor = 0.F, .maxSeedsPerSpM = 3};
 
   /// Scale on the hit errors given to the Acts finders. Their slope cut has no floor on its
   /// scattering term, so at 100 GeV it cuts at about 1 sigma of the hit errors; this makes it at
