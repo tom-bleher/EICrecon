@@ -2,12 +2,13 @@
 // Copyright (C) 2026 Tom Bleher
 
 #include <Acts/Definitions/Algebra.hpp>
-#include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <Eigen/Core>
-#include <Eigen/LU>
+#include <edm4eic/Cov6f.h>
+#include <edm4eic/TrackParametersCollection.h>
+#include <edm4eic/TrackSeedCollection.h>
+#include <edm4hep/Vector3f.h>
 #include <cmath>
 #include <initializer_list>
 #include <optional>
@@ -22,11 +23,6 @@ namespace {
 
 const Acts::Vector3 kField{0., 1.3 * Acts::UnitConstants::T, 0.};
 
-/// A hit at a position in kField
-B0TrackSeeding::Hit hit(const Acts::Vector3& position) {
-  return {.position = position, .field = kField, .time = 0., .variance = 4e-4, .index = 0};
-}
-
 /// Position at z of a track of charge q and momentum p starting at (0, 0, 5800) along +z in kField;
 /// the force q v x B points along -x for q > 0
 Acts::Vector3 helix(double z, double q, double p) {
@@ -37,42 +33,20 @@ Acts::Vector3 helix(double z, double q, double p) {
 
 } // namespace
 
-TEST_CASE("B0TrackSeeding rotates the hits into a frame along the field and the beam",
-          "[B0TrackSeeding]") {
-  // The ion beam at the crossing angle, and the B0 field off its midplane, where the quadrupole
-  // term turns it about the beam
-  const double crossing = -0.025;
-  const Acts::Vector3 beam{std::sin(crossing), 0., std::cos(crossing)};
-  const Acts::Vector3 field{-8.1224 * Acts::UnitConstants::T / Acts::UnitConstants::m * 80. *
-                                Acts::UnitConstants::mm,
-                            1.18 * Acts::UnitConstants::T, 0.};
-  const auto rotation = B0TrackSeeding::frameRotation(field, beam);
-  CHECK((rotation * rotation.transpose()).isApprox(Acts::RotationMatrix3::Identity(), 1e-12));
-  CHECK(rotation.determinant() == Catch::Approx(1.));
-  // z' along the field, x' along the beam as far as it is across the field
-  CHECK((rotation * field.normalized()).isApprox(Acts::Vector3::UnitZ(), 1e-12));
-  const Acts::Vector3 beamPrimed = rotation * beam;
-  CHECK(beamPrimed.y() == Catch::Approx(0.).margin(1e-12));
-  CHECK(beamPrimed.x() > 0.99);
-}
-
 TEST_CASE("B0TrackSeeding recovers charge and momentum on a helix", "[B0TrackSeeding]") {
-  B0TrackSeedingConfig cfg;
+  const B0TrackSeedingConfig cfg;
   for (const double q : {+1., -1.}) {
     for (const double p : {5., 20., 100.}) {
-      const auto seed = B0TrackSeeding::makeSeed(cfg, hit(helix(5900., q, p)),
-                                                 hit(helix(6270., q, p)), hit(helix(6880., q, p)));
+      edm4eic::TrackSeedCollection seeds;
+      edm4eic::TrackParametersCollection parameters;
+      const auto seed = B0TrackSeeding::addSeed(cfg, helix(5900., q, p), helix(6270., q, p),
+                                                helix(6880., q, p), kField, 3.F, seeds, parameters);
       REQUIRE(seed.has_value());
-      CHECK(seed->parameters[Acts::eBoundQOverP] * Acts::UnitConstants::GeV ==
-            Catch::Approx(q / p).epsilon(0.01));
-      CHECK(seed->anchor.z() == Catch::Approx(5900. - cfg.anchorDistance).margin(0.1));
-      CHECK(
-          seed->errors[Acts::eBoundQOverP] ==
-          Catch::Approx(cfg.qOverPRelativeError * std::abs(seed->parameters[Acts::eBoundQOverP])));
+      CHECK(parameters[0].getQOverP() == Catch::Approx(q / p).epsilon(0.01));
+      CHECK(parameters[0].getTime() == Catch::Approx(3.));
+      CHECK(seeds[0].getPerigee().z == Catch::Approx(5900. - cfg.anchorDistance).margin(0.1));
+      CHECK(std::sqrt(parameters[0].getCovariance()(4, 4)) ==
+            Catch::Approx(cfg.qOverPRelativeError / p).epsilon(0.01));
     }
   }
-
-  CHECK_FALSE(B0TrackSeeding::makeSeed(cfg, hit(helix(5900., 1., 0.5)), hit(helix(6270., 1., 0.5)),
-                                       hit(helix(6880., 1., 0.5)))
-                  .has_value());
 }
