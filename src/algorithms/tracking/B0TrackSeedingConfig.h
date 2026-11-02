@@ -31,6 +31,16 @@ struct B0TrackSeedingConfig {
   /// least hitErrorScale sigma.
   double hitErrorScale = 3.;
 
+  /// Hit-time window against other bunch crossings, in sigmas of the hit time errors; 0 turns it
+  /// off. The later hit may lag a light-speed flight by up to the lag of the slowest seeded
+  /// particle and may not be early.
+  double timeWindowSigmas = 5.;
+  /// Minimum hit time error in the window, in EDM4eic units (ns)
+  double timeErrorFloor = 0.01 * edm4eic::unit::ns;
+  /// Mass of the slowest seeded particle, at minMomentum. For nuclear fragments use the mass per
+  /// unit charge, as minMomentum cuts on rigidity.
+  double slowParticleMass = 0.938272 * Acts::UnitConstants::GeV;
+
   /// Minimum seed momentum
   double minMomentum = 1. * Acts::UnitConstants::GeV;
   /// Distance of the seed perigee upstream of its first hit, where the track finding starts

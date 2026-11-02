@@ -10,6 +10,7 @@
 #include <Eigen/LU>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 
 #include "algorithms/tracking/B0TrackSeeding.h"
@@ -22,9 +23,15 @@ namespace {
 
 const Acts::Vector3 kField{0., 1.3 * Acts::UnitConstants::T, 0.};
 
-/// A hit at a position in kField
-B0TrackSeeding::Hit hit(const Acts::Vector3& position) {
-  return {.position = position, .field = kField, .time = 0., .variance = 4e-4, .index = 0};
+/// A hit at a position in kField, in time with a particle of the given 1/beta from z = 5850 mm,
+/// with 30 ps time errors (Acts measures time as a length)
+B0TrackSeeding::Hit hit(const Acts::Vector3& position, double inverseBeta = 1.) {
+  return {.position  = position,
+          .field     = kField,
+          .time      = (position.z() - 5850.) * inverseBeta,
+          .timeError = 0.03 * Acts::UnitConstants::ns,
+          .variance  = 4e-4,
+          .index     = 0};
 }
 
 /// Position at z of a track of charge q and momentum p starting at (0, 0, 5800) along +z in kField;
@@ -54,6 +61,36 @@ TEST_CASE("B0TrackSeeding rotates the hits into a frame along the field and the 
   const Acts::Vector3 beamPrimed = rotation * beam;
   CHECK(beamPrimed.y() == Catch::Approx(0.).margin(1e-12));
   CHECK(beamPrimed.x() > 0.99);
+}
+
+TEST_CASE("B0TrackSeeding keeps hits within the time window", "[B0TrackSeeding]") {
+  B0TrackSeedingConfig cfg;
+  const auto first = hit({0., 0., 5850.});
+  // Over 1030 mm: light passes, a 1.2 GeV proton (lag 0.92 ns) passes, the window of a 1 GeV
+  // proton ends at 1.28 ns plus 5 sigma of 0.042 ns
+  CHECK(B0TrackSeeding::inTimeWindow(cfg, first, hit({0., 0., 6880.})));
+  auto lagged = [&](double ns) {
+    auto h = hit({0., 0., 6880.});
+    h.time += ns * Acts::UnitConstants::ns;
+    return h;
+  };
+  CHECK(B0TrackSeeding::inTimeWindow(cfg, first, lagged(0.92)));
+  CHECK(B0TrackSeeding::inTimeWindow(cfg, first, lagged(1.45)));
+  CHECK_FALSE(B0TrackSeeding::inTimeWindow(cfg, first, lagged(1.55)));
+  // Nothing is faster than light; hits from another bunch crossing are rejected
+  CHECK_FALSE(B0TrackSeeding::inTimeWindow(cfg, first, lagged(-0.3)));
+  CHECK_FALSE(B0TrackSeeding::inTimeWindow(cfg, first, lagged(10.)));
+  // With hit time errors of several ns the window rejects nothing
+  auto coarse      = lagged(-10.);
+  coarse.timeError = 8. * Acts::UnitConstants::ns;
+  CHECK(B0TrackSeeding::inTimeWindow(cfg, first, coarse));
+  // A hit without a valid time error is never rejected, and the window can be turned off
+  auto invalid      = lagged(30.);
+  invalid.timeError = std::numeric_limits<double>::quiet_NaN();
+  CHECK(B0TrackSeeding::inTimeWindow(cfg, first, invalid));
+  auto off             = cfg;
+  off.timeWindowSigmas = 0.;
+  CHECK(B0TrackSeeding::inTimeWindow(off, first, lagged(-30.)));
 }
 
 TEST_CASE("B0TrackSeeding recovers charge and momentum on a helix", "[B0TrackSeeding]") {

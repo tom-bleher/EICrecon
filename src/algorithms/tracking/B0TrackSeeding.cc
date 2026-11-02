@@ -35,6 +35,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -52,6 +53,37 @@
 
 namespace eicrecon {
 
+namespace {
+
+  /// The three hits of a triplet are in time with each other
+  class TimeWindowCut final : public Acts::ITripletSeedCuts {
+  public:
+    TimeWindowCut(const B0TrackSeedingConfig& cfg, std::span<const B0TrackSeeding::Hit> hits)
+        : m_cfg(cfg), m_hits(hits) {}
+
+    float seedWeight(const Acts::ConstSpacePointProxy2& /*bottom*/,
+                     const Acts::ConstSpacePointProxy2& /*middle*/,
+                     const Acts::ConstSpacePointProxy2& /*top*/) const override {
+      return 0.F;
+    }
+    bool singleSeedCut(float /*weight*/, const Acts::ConstSpacePointProxy2& bottom,
+                       const Acts::ConstSpacePointProxy2& middle,
+                       const Acts::ConstSpacePointProxy2& top) const override {
+      const auto& b = m_hits[bottom.index()];
+      const auto& m = m_hits[middle.index()];
+      const auto& t = m_hits[top.index()];
+      return B0TrackSeeding::inTimeWindow(m_cfg, b, m) &&
+             B0TrackSeeding::inTimeWindow(m_cfg, m, t) && B0TrackSeeding::inTimeWindow(m_cfg, b, t);
+    }
+    void cutPerMiddleSp(std::span<Acts::TripletCandidate2>& /*candidates*/) const override {}
+
+  private:
+    B0TrackSeedingConfig m_cfg;
+    std::span<const B0TrackSeeding::Hit> m_hits;
+  };
+
+} // namespace
+
 Acts::RotationMatrix3 B0TrackSeeding::frameRotation(const Acts::Vector3& field,
                                                     const Acts::Vector3& beam) {
   const Acts::Vector3 z = field.normalized();
@@ -61,6 +93,27 @@ Acts::RotationMatrix3 B0TrackSeeding::frameRotation(const Acts::Vector3& field,
   rotation.row(1) = z.cross(x).transpose();
   rotation.row(2) = z.transpose();
   return rotation;
+}
+
+bool B0TrackSeeding::inTimeWindow(const B0TrackSeedingConfig& cfg, const Hit& first,
+                                  const Hit& later) {
+  if (!(cfg.timeWindowSigmas > 0.)) {
+    return true;
+  }
+  // Acts time is a length (c = 1). The slowest seeded particle lags light by
+  // distance * (1 / beta - 1), with 1 / beta = E / p at minMomentum.
+  const double distance = (later.position - first.position).norm();
+  const double lag      = later.time - first.time - distance;
+  const double slowLag =
+      distance * (std::hypot(cfg.minMomentum, cfg.slowParticleMass) / cfg.minMomentum - 1.);
+  const double floor = cfg.timeErrorFloor / edm4eic::unit::ns * Acts::UnitConstants::ns;
+  // A hit without a valid time error is never rejected
+  auto error = [&](const Hit& hit) {
+    return std::isfinite(hit.timeError) ? std::max(hit.timeError, floor)
+                                        : std::numeric_limits<double>::infinity();
+  };
+  const double tolerance = cfg.timeWindowSigmas * std::hypot(error(first), error(later));
+  return lag >= -tolerance && lag <= slowLag + tolerance;
 }
 
 std::optional<B0TrackSeeding::Seed> B0TrackSeeding::makeSeed(const B0TrackSeedingConfig& cfg,
@@ -160,9 +213,10 @@ void B0TrackSeeding::process(const Input& input, const Output& output) const {
     const Acts::Vector3 position =
         Acts::Vector3(pos.x, pos.y, pos.z) / edm4eic::unit::mm * Acts::UnitConstants::mm;
     const auto cov = hit.getPositionError();
-    hits.push_back({.position = position,
-                    .field    = field->getField(position, fieldCache).value(),
-                    .time     = hit.getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns,
+    hits.push_back({.position  = position,
+                    .field     = field->getField(position, fieldCache).value(),
+                    .time      = hit.getTime() / edm4eic::unit::ns * Acts::UnitConstants::ns,
+                    .timeError = hit.getTimeError() / edm4eic::unit::ns * Acts::UnitConstants::ns,
                     .variance = std::max(cov.xx, cov.yy) / (edm4eic::unit::mm * edm4eic::unit::mm) *
                                 (Acts::UnitConstants::mm * Acts::UnitConstants::mm),
                     .index    = i});
@@ -171,9 +225,11 @@ void B0TrackSeeding::process(const Input& input, const Output& output) const {
     return std::tuple{hit.position.z(), hit.position.x(), hit.position.y(), hit.index};
   });
 
+  auto filterConfig           = m_filterConfig;
+  filterConfig.experimentCuts = std::make_shared<TimeWindowCut>(m_cfg, hits);
   Acts::BroadTripletSeedFilter::State filterState;
   Acts::BroadTripletSeedFilter::Cache filterCache;
-  Acts::BroadTripletSeedFilter filter(m_filterConfig, filterState, filterCache, *m_filterLogger);
+  Acts::BroadTripletSeedFilter filter(filterConfig, filterState, filterCache, *m_filterLogger);
   Acts::TripletSeeder::Cache seederCache;
 
   // Every hit is a space point, in the same order: space point i is hit i, with its position in the

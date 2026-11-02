@@ -45,6 +45,13 @@ private:
   ParameterRef<double> m_hitErrorScale{
       this, "hitErrorScale", config().hitErrorScale,
       "factor on the hit errors given to the Acts finders, the minimum sigmas of their slope cut"};
+  ParameterRef<double> m_timeWindowSigmas{this, "timeWindowSigmas", config().timeWindowSigmas,
+                                          "hit-time window in units of the hit time errors, 0 off"};
+  ParameterRef<double> m_timeErrorFloor{this, "timeErrorFloor", config().timeErrorFloor,
+                                        "min hit time error in the time window, ns"};
+  ParameterRef<double> m_slowParticleMass{
+      this, "slowParticleMass", config().slowParticleMass,
+      "mass per unit charge of the slowest seeded particle, GeV"};
   ParameterRef<double> m_minMomentum{this, "minMomentum", config().minMomentum,
                                      "min seed momentum, GeV"};
   ParameterRef<double> m_anchorDistance{

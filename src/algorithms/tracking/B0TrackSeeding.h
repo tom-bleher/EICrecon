@@ -55,6 +55,7 @@ public:
     Acts::Vector3 position;
     Acts::Vector3 field;
     double time;
+    double timeError;
     double variance;
     std::size_t index;
   };
@@ -68,6 +69,9 @@ public:
 
   /// Global to seeding frame; rows x' (beam, across the field), y', z' (field)
   static Acts::RotationMatrix3 frameRotation(const Acts::Vector3& field, const Acts::Vector3& beam);
+
+  /// Whether the later hit can follow the first one in time (see B0TrackSeedingConfig)
+  static bool inTimeWindow(const B0TrackSeedingConfig& cfg, const Hit& first, const Hit& later);
 
   /// Seed parameters of a hit triplet, none below minMomentum
   static std::optional<Seed> makeSeed(const B0TrackSeedingConfig& cfg, const Hit& a, const Hit& b,
