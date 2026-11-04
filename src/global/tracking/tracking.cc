@@ -427,8 +427,7 @@ void InitPlugin(JApplication* app) {
 
   // B0 TRACKER
 
-  app->Add(new JOmniFactoryGeneratorT<TrackerMeasurementFromHits_factory>(
-      "B0TrackerMeasurements", {"B0TrackerRecHits"}, {"B0TrackerMeasurements"}, app));
+  // B0TrackerMeasurements come from pad clustering in the B0TRK plugin
 
   app->Add(new JOmniFactoryGeneratorT<CKFTracking_factory>(
       "B0TrackerCKFTruthSeededTrajectories", {"B0TrackerTruthSeeds", "B0TrackerMeasurements"},

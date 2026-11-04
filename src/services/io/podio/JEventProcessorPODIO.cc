@@ -209,6 +209,7 @@ JEventProcessorPODIO::JEventProcessorPODIO() {
       "B0TrackerRecHits",
       "B0TrackerRawHits",
       "B0TrackerHits",
+      "B0TrackerSharedHits",
       "B0TrackerRawHitLinks",
       "B0TrackerRawHitAssociations",
       "B0TrackerSeeds",
