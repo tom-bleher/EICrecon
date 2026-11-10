@@ -22,6 +22,7 @@
 
 #include "algorithms/tracking/B0TrackSeeding.h"
 #include "algorithms/tracking/B0TrackSeedingConfig.h"
+#include "algorithms/tracking/TrackSeeding.h"
 
 namespace {
 
@@ -51,6 +52,9 @@ edm4eic::TrackerHitCollection helixHits(double q, double p) {
 }
 
 } // namespace
+
+// Acts older than 45.3 has no Seeding2 API, and B0TrackSeeding makes no seeds
+#if TRACKSEEDING_HAS_SEEDING2 || TRACKSEEDING_HAS_SEEDING
 
 TEST_CASE("B0TrackSeeding finds helices in a field off the vertical", "[B0TrackSeeding]") {
   const Acts::ConstantBField field(kFieldStrength * kFieldDirection);
@@ -109,6 +113,8 @@ TEST_CASE("B0TrackSeeding keeps stiff tracks with hits off the helix by their re
   algo.findSeeds(hits, field, Acts::MagneticFieldContext{}, seeds, parameters);
   CHECK(seeds.size() == 1);
 }
+
+#endif
 
 TEST_CASE("B0TrackSeeding makes no seed", "[B0TrackSeeding]") {
   eicrecon::B0TrackSeeding algo("B0TrackSeeding");
