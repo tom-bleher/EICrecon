@@ -172,6 +172,8 @@ void B0TrackSeeding::findSeeds(const edm4eic::TrackerHitCollection& hits,
   Acts::BroadTripletSeedFilter::Config filterConfig;
   filterConfig.deltaRMin          = m_cfg.stationGap;
   filterConfig.impactWeightFactor = 1.e-4F;
+  filterConfig.maxSeedsPerSpMConf = m_cfg.maxSeedsPerMiddleHit;
+  filterConfig.maxSeedsPerSpM     = m_cfg.maxSeedsPerMiddleHit;
 
   // Space point i is hit i, with its position in the frame of the current middle hit. All hits are
   // bottom and top candidates: the doublet finders keep those at least deltaRMin from the middle.

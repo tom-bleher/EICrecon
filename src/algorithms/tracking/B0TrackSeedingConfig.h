@@ -23,6 +23,10 @@ struct B0TrackSeedingConfig {
   /// scattering no longer covers the hit resolution, and half of them at 250 GeV.
   float hitErrorScale = 3.;
 
+  /// Seeds kept per middle hit, the best first (maxSeedsPerSpMConf and maxSeedsPerSpM of the Acts
+  /// filter). In busy events genuine triplets can be lost at this cap.
+  unsigned int maxSeedsPerMiddleHit = 5;
+
   /// Distance of the seed perigee upstream of its first hit, where the track finding starts
   double anchorDistance = 10. * Acts::UnitConstants::mm;
 

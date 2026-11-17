@@ -29,6 +29,9 @@ private:
   ParameterRef<float> m_minPt{this, "minPt", config().minPt, "min momentum across the field, GeV"};
   ParameterRef<float> m_hitErrorScale{this, "hitErrorScale", config().hitErrorScale,
                                       "scale of the hit position errors in the triplet slope cut"};
+  ParameterRef<unsigned int> m_maxSeedsPerMiddleHit{this, "maxSeedsPerMiddleHit",
+                                                    config().maxSeedsPerMiddleHit,
+                                                    "seeds kept per middle hit, the best first"};
 
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
 
