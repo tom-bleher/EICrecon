@@ -242,7 +242,8 @@ void B0TrackSeeding::findSeeds(const edm4eic::TrackerHitCollection& hits,
 
 namespace eicrecon {
 
-// Acts older than 45.3 has no Seeding2 API: no B0 seeds, as with TrackSeeding before
+// Acts older than 45.3 has no Seeding2 API, so there are no B0 seeds. TrackSeeding ran its
+// orthogonal seeder on the B0 hits there instead.
 void B0TrackSeeding::process(const Input& /*input*/, const Output& /*output*/) const {}
 
 void B0TrackSeeding::findSeeds(const edm4eic::TrackerHitCollection& /*hits*/,

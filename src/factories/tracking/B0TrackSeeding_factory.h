@@ -40,7 +40,7 @@ public:
     m_algo->init();
   }
 
-  void Process(int32_t /* run_number */, uint64_t /* event_number */) {
+  void Process(int32_t /* run_number */, uint64_t /* event_number */) override {
     m_algo->process({m_hits_input()}, {m_seeds_output().get(), m_trackparams_output().get()});
   }
 };
