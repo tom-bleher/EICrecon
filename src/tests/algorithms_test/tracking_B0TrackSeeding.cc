@@ -97,7 +97,7 @@ TEST_CASE("B0TrackSeeding finds helices in a field off the vertical", "[B0TrackS
         CHECK(params.getQOverP() == Catch::Approx(q / p).epsilon(0.02));
         CHECK(params.getTime() == Catch::Approx(3.));
         CHECK(std::sqrt(params.getCovariance()(4, 4)) ==
-              Catch::Approx(cfg.qOverPRelativeError / p).epsilon(0.02));
+              Catch::Approx(cfg.prior.qOverPRelativeError / p).epsilon(0.02));
         // EDM4eic orders the covariance as phi, theta: near the z axis of the perigee, phi is the
         // less constrained
         CHECK(params.getCovariance()(2, 2) > params.getCovariance()(3, 3));
@@ -107,7 +107,7 @@ TEST_CASE("B0TrackSeeding finds helices in a field off the vertical", "[B0TrackS
         const auto perigee = seed.getPerigee();
         CHECK(perigee.z < first.z);
         CHECK(std::hypot(first.x - perigee.x, first.y - perigee.y, first.z - perigee.z) ==
-              Catch::Approx(cfg.anchorDistance).epsilon(0.01));
+              Catch::Approx(cfg.prior.anchorDistance).epsilon(0.01));
       }
     }
   }

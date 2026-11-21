@@ -4,18 +4,13 @@
 #include "B0TrackSeeding.h"
 
 #include <Acts/Definitions/Algebra.hpp>
-#include <Acts/Definitions/TrackParametrization.hpp>
 #include <Acts/Definitions/Units.hpp>
-#include <Acts/Seeding/EstimateTrackParamsFromSeed.hpp>
 #include <Acts/Utilities/Logger.hpp>
 #include <Acts/Utilities/MathHelpers.hpp>
 #include <Acts/Utilities/Result.hpp>
 #include <Acts/Utilities/UnitVectors.hpp>
-#include <Acts/Utilities/VectorHelpers.hpp>
-#include <edm4eic/Cov6f.h>
 #include <edm4eic/CovDiag3f.h>
 #include <edm4eic/unit_system.h>
-#include <edm4hep/Vector2f.h>
 #include <edm4hep/Vector3f.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -23,13 +18,13 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <span>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "ActsGeometryProvider.h"
 #include "B0TrackSeedingConfig.h"
+#include "HelixSeed.h"
 #include "TrackSeeding.h"
 
 // Acts version-specific includes
@@ -74,61 +69,6 @@ namespace {
 
   /// Opens a cut of the Acts finders, in Acts units
   constexpr float noLimit = 1.e5 * Acts::UnitConstants::mm;
-
-  /// Adds the seed of an Acts triplet on a helix in the field at its middle hit, unless it has no
-  /// finite non-zero q/p. Space point i is hit i, at positions[i] in Acts units.
-  void addSeed(const B0TrackSeedingConfig& cfg, const Acts::ConstSeedProxy2& actsSeed,
-               const edm4eic::TrackerHitCollection& hits, std::span<const Acts::Vector3> positions,
-               const Acts::Vector3& field, edm4eic::TrackSeedCollection& seeds,
-               edm4eic::TrackParametersCollection& parameters) {
-    const auto triplet           = actsSeed.spacePointIndices();
-    const Acts::Vector3& first   = positions[triplet[0]];
-    const Acts::FreeVector helix = Acts::estimateTrackParamsFromSeed(
-        first, 0., positions[triplet[1]], positions[triplet[2]], field);
-    const double qOverP = helix[Acts::eFreeQOverP] * Acts::UnitConstants::GeV / edm4eic::unit::GeV;
-    if (!helix.allFinite() || qOverP == 0.) {
-      return;
-    }
-
-    // CKFTracking rebuilds the perigee along global z from the seed's point, so the seed is at
-    // loc0 = loc1 = 0. Forward tracks run nearly parallel to it, so the loc1 and phi errors are
-    // scaled up.
-    const Acts::Vector3 direction = helix.segment<3>(Acts::eFreeDir0);
-    const double theta            = Acts::VectorHelpers::theta(direction);
-    const double sinTheta         = std::sin(theta);
-    // The perigee is not defined for a track along its axis
-    if (!(sinTheta > 0.)) {
-      return;
-    }
-
-    edm4eic::Cov6f cov;
-    cov(0, 0) = static_cast<float>(Acts::square(cfg.positionError));
-    cov(1, 1) = static_cast<float>(Acts::square(cfg.positionError / sinTheta));
-    cov(2, 2) = static_cast<float>(Acts::square(cfg.angleError / sinTheta));
-    cov(3, 3) = static_cast<float>(Acts::square(cfg.angleError));
-    cov(4, 4) = static_cast<float>(Acts::square(cfg.qOverPRelativeError * qOverP));
-    cov(5, 5) = static_cast<float>(Acts::square(cfg.timeError));
-
-    auto params = parameters.create();
-    params.setType(-1); // seed
-    params.setLoc({0.F, 0.F});
-    params.setPhi(static_cast<float>(Acts::VectorHelpers::phi(direction)));
-    params.setTheta(static_cast<float>(theta));
-    params.setQOverP(static_cast<float>(qOverP));
-    params.setTime(hits[triplet[0]].getTime());
-    params.setCovariance(cov);
-
-    const Acts::Vector3 anchor =
-        (first - cfg.anchorDistance * direction) / Acts::UnitConstants::mm * edm4eic::unit::mm;
-    auto seed = seeds.create();
-    seed.setPerigee({static_cast<float>(anchor.x()), static_cast<float>(anchor.y()),
-                     static_cast<float>(anchor.z())});
-    seed.setQuality(actsSeed.quality());
-    seed.setParams(params);
-    for (const auto i : triplet) {
-      seed.addToHits(hits[i]);
-    }
-  }
 
 } // namespace
 
@@ -233,7 +173,9 @@ void B0TrackSeeding::findSeeds(const edm4eic::TrackerHitCollection& hits,
         spacePoints.range({m, m + 1}).asConst(), candidates, {0.F, 0.F}, actsSeeds);
 
     for (const Acts::ConstSeedProxy2 actsSeed : std::as_const(actsSeeds)) {
-      addSeed(m_cfg, actsSeed, hits, positions, field, seeds, parameters);
+      const auto triplet = actsSeed.spacePointIndices();
+      addHelixSeed(m_cfg.prior, {triplet[0], triplet[1], triplet[2]}, actsSeed.quality(), hits,
+                   positions, field, seeds, parameters);
     }
   }
 }

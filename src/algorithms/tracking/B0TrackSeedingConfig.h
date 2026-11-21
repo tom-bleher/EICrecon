@@ -4,7 +4,8 @@
 #pragma once
 
 #include <Acts/Definitions/Units.hpp>
-#include <edm4eic/unit_system.h>
+
+#include "algorithms/tracking/HelixSeed.h"
 
 namespace eicrecon {
 
@@ -23,14 +24,8 @@ struct B0TrackSeedingConfig {
   /// scattering no longer covers the hit resolution, and half of them at 250 GeV.
   float hitErrorScale = 3.;
 
-  /// Distance of the seed perigee upstream of its first hit, where the track finding starts
-  double anchorDistance = 10. * Acts::UnitConstants::mm;
-
-  // Seed prior, a loose diagonal envelope for the track finding, in EDM4eic units
-  double positionError       = 0.1 * edm4eic::unit::mm;
-  double angleError          = 2.e-3; // rad
-  double qOverPRelativeError = 0.25;
-  double timeError           = 10. * edm4eic::unit::ns;
+  /// Where the seeds start and their prior
+  HelixSeedPrior prior{};
 };
 
 } // namespace eicrecon
