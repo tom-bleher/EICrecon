@@ -2,7 +2,6 @@
 // Copyright (C) 2022 - 2025, Dmitry Romanov, Tyler Kutz, Wouter Deconinck, Dmitry Kalinkin
 
 #include <Acts/Definitions/Units.hpp>
-#include <Evaluator/DD4hepUnits.h>
 #include <JANA/JApplicationFwd.h>
 #include <JANA/Utils/JTypeInfo.h>
 #include <edm4eic/MCRecoTrackParticleAssociationCollection.h>
@@ -19,7 +18,6 @@
 #include <variant>
 #include <vector>
 
-#include "algorithms/tracking/TrackParamTruthInitConfig.h"
 #include "algorithms/tracking/TrackPropagationConfig.h"
 #include "extensions/jana/JOmniFactoryGeneratorT.h"
 #include "factories/meta/CollectionCollector_factory.h"
@@ -31,6 +29,7 @@
 #include "factories/tracking/IterativeVertexFinder_factory.h"
 #include "factories/tracking/SecondaryVertexFinder_factory.h"
 #include "factories/tracking/TrackParamTruthInit_factory.h"
+#include "factories/tracking/TruthTrackSeeding_factory.h"
 #include "factories/tracking/TrackProjector_factory.h"
 #include "factories/tracking/TrackPropagation_factory.h"
 #include "factories/tracking/TrackSeeding_factory.h"
@@ -50,22 +49,14 @@ void InitPlugin(JApplication* app) {
       "CentralTrackerTruthSeeds", {"EventHeader", "MCParticles"},
       {"CentralTrackerTruthSeeds", "CentralTrackerTruthSeedParameters"}, {}, app));
 
-  // Dedicated B0 truth seeder: relaxed vertex-z cut so that charged daughters of Lambda
-  // decays at large z (up to ~O(meters)) are also seeded for the B0 tracker CKF.
-  app->Add(new JOmniFactoryGeneratorT<TrackParamTruthInit_factory>(
-      "B0TrackerTruthSeeds", {"EventHeader", "MCParticles"},
+  // B0 truth seeds: each particle seeded from triplets of its own hits on different stations,
+  // with the helix estimate and prior of the B0 hit seeds, so that the two differ only in which
+  // triplets they take. Particles need hits on at least three stations, wherever they come from
+  // (e.g. Lambda daughters decaying far downstream of the IP).
+  app->Add(new JOmniFactoryGeneratorT<TruthTrackSeeding_factory>(
+      "B0TrackerTruthSeeds", {"B0TrackerRecHits", "B0TrackerRawHitLinks"},
       {"B0TrackerTruthSeeds", "B0TrackerTruthSeedParameters"},
-      TrackParamTruthInitConfig{
-          .maxVertexX         = 240 * dd4hep::mm, // maxVertexZ * tan(40mrad) ~ 240mm
-          .maxVertexY         = 240 * dd4hep::mm,
-          .maxVertexZ         = 6000 * dd4hep::mm, // B0 tracker starts at ~6 m from IP
-          .minMomentum        = 100 * dd4hep::MeV,
-          .maxEtaForward      = 6.0,
-          .maxEtaBackward     = 0.0, // forward-going particles only
-          .momentumSmear      = 0.1,
-          .useVertexAsPerigee = true, // anchor at decay vertex, not beam-axis PCA
-      },
-      app));
+      {.minHitDistance = 150. * Acts::UnitConstants::mm}, app));
 
   // CENTRAL TRACKER
 
