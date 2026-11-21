@@ -10,14 +10,18 @@
 #include <Evaluator/DD4hepUnits.h>
 #include <algorithms/logger.h>
 #include <edm4eic/Cov6f.h>
+#include <edm4hep/SimTrackerHit.h>
 #include <edm4hep/Vector2f.h>
 #include <edm4hep/Vector3d.h>
 #include <edm4hep/Vector3f.h>
+#include <podio/ObjectID.h>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <tuple>
 
 #include "extensions/spdlog/SpdlogFormatters.h" // IWYU pragma: keep
@@ -28,13 +32,35 @@ void TrackParamTruthInit::process(const Input& input, const Output& output) cons
   // MCParticles uses numerical values in its specified units,
   // while m_cfg is in the DD4hep unit system
 
-  const auto [headers, mcparticles]    = input;
-  auto [track_seeds, track_parameters] = output;
+  const auto [headers, mcparticles, simhit_collections] = input;
+  auto [track_seeds, track_parameters]                  = output;
 
   // local random generator
   auto seed = m_uid.getUniqueID(*headers, "TrackParamTruthInit");
   std::default_random_engine generator(seed);
   std::normal_distribution<double> gaussian;
+
+  // Earliest hit of each particle (by time), keyed by the particle's ObjectID.
+  // Hits flagged as produced by a secondary carry the secondary's momentum and are skipped.
+  std::map<podio::ObjectID, edm4hep::SimTrackerHit> first_hits;
+  if (m_cfg.anchorAtFirstHit) {
+    if (simhit_collections.empty()) {
+      throw std::runtime_error(
+          "TrackParamTruthInit: anchorAtFirstHit requires at least one sim hit collection");
+    }
+    for (const auto& simhits : simhit_collections) {
+      for (const auto& hit : *simhits) {
+        if (hit.isProducedBySecondary()) {
+          continue;
+        }
+        const auto id = hit.getParticle().getObjectID();
+        auto it       = first_hits.find(id);
+        if (it == first_hits.end() || hit.getTime() < it->second.getTime()) {
+          first_hits.insert_or_assign(id, hit);
+        }
+      }
+    }
+  }
 
   // Loop over input particles
   for (const auto& mcparticle : *mcparticles) {
@@ -86,10 +112,38 @@ void TrackParamTruthInit::process(const Input& input, const Output& output) cons
       continue;
     }
 
-    // modify initial momentum to avoid bleeding truth to results when fit fails
-    const auto pinit = pmag * (1.0 + m_cfg.momentumSmear * gaussian(generator));
+    // Kinematics at the seed start: the vertex, or anchorDistance before the particle's
+    // earliest hit with the momentum it has at that hit
+    double seed_pmag     = pmag;
+    double seed_phi      = phi;
+    double seed_theta    = theta;
+    double seed_time     = mcparticle.getTime();
+    Acts::Vector3 anchor = Acts::Vector3::Zero();
+    if (m_cfg.anchorAtFirstHit) {
+      const auto it = first_hits.find(mcparticle.getObjectID());
+      if (it == first_hits.end()) {
+        trace("ignoring particle without hits");
+        continue;
+      }
+      const auto& hp = it->second.getMomentum();
+      const auto& hx = it->second.getPosition();
+      seed_pmag      = std::hypot(hp.x, hp.y, hp.z);
+      if (seed_pmag * dd4hep::GeV < m_cfg.minMomentum) {
+        trace("ignoring particle with p = {} GeV at its first hit", seed_pmag);
+        continue;
+      }
+      seed_phi   = std::atan2(hp.y, hp.x);
+      seed_theta = std::atan2(std::hypot(hp.x, hp.y), hp.z);
+      seed_time  = it->second.getTime();
+      anchor = Acts::Vector3(hx.x, hx.y, hx.z) -
+               (m_cfg.anchorDistance / dd4hep::mm) * Acts::Vector3(hp.x, hp.y, hp.z) / seed_pmag;
+    }
 
-    Acts::Vector3 direction(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+    // modify initial momentum to avoid bleeding truth to results when fit fails
+    const auto pinit = seed_pmag * (1.0 + m_cfg.momentumSmear * gaussian(generator));
+
+    Acts::Vector3 direction(sin(seed_theta) * cos(seed_phi), sin(seed_theta) * sin(seed_phi),
+                            cos(seed_theta));
 
     // Choose the perigee reference point and compute local (d0, z0) coordinates.
     //
@@ -106,10 +160,16 @@ void TrackParamTruthInit::process(const Input& input, const Output& output) cons
     //
     // useVertexAsPerigee: anchor the perigee at the MCParticle vertex itself so
     // the CKF only needs to propagate forward from the actual production point.
+    //
+    // anchorAtFirstHit: anchor the perigee just before the particle's first hit, so the CKF
+    // starts next to its first measurement (takes precedence over useVertexAsPerigee).
     Acts::Vector3 perigee_center;
     Acts::Vector3 global;
 
-    if (m_cfg.useVertexAsPerigee) {
+    if (m_cfg.anchorAtFirstHit) {
+      perigee_center = anchor;
+      global         = anchor; // d0 = z0 = 0
+    } else if (m_cfg.useVertexAsPerigee) {
       // Place perigee at the vertex; the particle starts there so d0=z0=0 exactly.
       perigee_center = Acts::Vector3(v.x, v.y, v.z);
       global         = perigee_center; // PCA = vertex itself
@@ -139,17 +199,17 @@ void TrackParamTruthInit::process(const Input& input, const Output& output) cons
     track_parameter.setType(-1); // type --> seed(-1)
     track_parameter.setLoc({static_cast<float>(localpos(0)),
                             static_cast<float>(localpos(1))}); // 2d location on surface [mm]
-    track_parameter.setPhi(phi);                               // phi [rad]
-    track_parameter.setTheta(theta);                           // theta [rad]
+    track_parameter.setPhi(seed_phi);                          // phi [rad]
+    track_parameter.setTheta(seed_theta);                      // theta [rad]
     track_parameter.setQOverP(charge / (pinit / dd4hep::GeV)); // Q/p [e/GeV]
-    track_parameter.setTime(mcparticle.getTime());             // time [ns]
+    track_parameter.setTime(seed_time);                        // time [ns]
     edm4eic::Cov6f cov;
-    cov(0, 0) = 1.0;  // loc0
-    cov(1, 1) = 1.0;  // loc1
-    cov(2, 2) = 0.05; // phi
-    cov(3, 3) = 0.01; // theta
-    cov(4, 4) = 0.1;  // qOverP
-    cov(5, 5) = 10e9; // time
+    cov(0, 0) = std::pow(m_cfg.locError / dd4hep::mm, 2);     // loc0 [mm^2]
+    cov(1, 1) = std::pow(m_cfg.locError / dd4hep::mm, 2);     // loc1 [mm^2]
+    cov(2, 2) = std::pow(m_cfg.phiError / dd4hep::rad, 2);    // phi [rad^2]
+    cov(3, 3) = std::pow(m_cfg.thetaError / dd4hep::rad, 2);  // theta [rad^2]
+    cov(4, 4) = std::pow(m_cfg.qOverPError * dd4hep::GeV, 2); // qOverP [(e/GeV)^2]
+    cov(5, 5) = 10e9;                                         // time
     track_parameter.setCovariance(cov);
 
     // Insert into edm4eic::TrackSeeds
@@ -163,12 +223,14 @@ void TrackParamTruthInit::process(const Input& input, const Output& output) cons
     // Debug output
     if (level() <= algorithms::LogLevel::kDebug) {
       debug("Invoke track finding seeded by truth particle with:");
-      debug("   p     = {} GeV (smeared to {} GeV)", pmag / dd4hep::GeV, pinit / dd4hep::GeV);
+      debug("   p     = {} GeV (smeared to {} GeV)", seed_pmag / dd4hep::GeV, pinit / dd4hep::GeV);
       debug("   q     = {}", charge);
-      debug("   q/p   = {} e/GeV (smeared to {} e/GeV)", charge / (pmag / dd4hep::GeV),
+      debug("   q/p   = {} e/GeV (smeared to {} e/GeV)", charge / (seed_pmag / dd4hep::GeV),
             charge / (pinit / dd4hep::GeV));
-      debug("   theta = {}", theta);
-      debug("   phi   = {}", phi);
+      debug("   theta = {}", seed_theta);
+      debug("   phi   = {}", seed_phi);
+      debug("   start = ({}, {}, {}) mm", perigee_center.x(), perigee_center.y(),
+            perigee_center.z());
     }
   }
 }

@@ -8,9 +8,11 @@
 #include <edm4eic/TrackSeedCollection.h>
 #include <edm4hep/EventHeaderCollection.h>
 #include <edm4hep/MCParticleCollection.h>
+#include <edm4hep/SimTrackerHitCollection.h>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ActsGeometryProvider.h"
 #include "TrackParamTruthInitConfig.h"
@@ -22,7 +24,8 @@
 namespace eicrecon {
 
 using TrackParamTruthInitAlgorithm = algorithms::Algorithm<
-    algorithms::Input<edm4hep::EventHeaderCollection, edm4hep::MCParticleCollection>,
+    algorithms::Input<edm4hep::EventHeaderCollection, edm4hep::MCParticleCollection,
+                      std::vector<edm4hep::SimTrackerHitCollection>>,
     algorithms::Output<edm4eic::TrackSeedCollection, edm4eic::TrackParametersCollection>>;
 
 class TrackParamTruthInit : public TrackParamTruthInitAlgorithm,
@@ -31,7 +34,7 @@ class TrackParamTruthInit : public TrackParamTruthInitAlgorithm,
 public:
   TrackParamTruthInit(std::string_view name)
       : TrackParamTruthInitAlgorithm{name,
-                                     {"inputMCParticles"},
+                                     {"inputEventHeader", "inputMCParticles", "inputSimHits"},
                                      {"outputTrackParameters"},
                                      "create track seeds from truth information"} {}
 

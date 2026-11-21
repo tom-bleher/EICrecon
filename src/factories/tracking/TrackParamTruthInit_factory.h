@@ -6,6 +6,8 @@
 
 #include <JANA/JEvent.h>
 #include <edm4eic/TrackParametersCollection.h>
+#include <edm4hep/SimTrackerHitCollection.h>
+#include <gsl/pointers>
 #include <memory>
 #include <string>
 #include <utility>
@@ -28,6 +30,7 @@ private:
 
   PodioInput<edm4hep::EventHeader> m_headers_input{this};
   PodioInput<edm4hep::MCParticle> m_particles_input{this};
+  VariadicPodioInput<edm4hep::SimTrackerHit> m_simhits_input{this};
   PodioOutput<edm4eic::TrackSeed> m_seeds_output{this};
   PodioOutput<edm4eic::TrackParameters> m_parameters_output{this};
 
@@ -51,6 +54,20 @@ private:
   ParameterRef<bool> m_useVertexAsPerigee{
       this, "UseVertexAsPerigee", config().useVertexAsPerigee,
       "Anchor the seed perigee at the MCParticle vertex (for displaced tracks)"};
+  ParameterRef<bool> m_anchorAtFirstHit{
+      this, "AnchorAtFirstHit", config().anchorAtFirstHit,
+      "Start the seed just before the particle's earliest hit in the sim hit inputs"};
+  ParameterRef<double> m_anchorDistance{
+      this, "AnchorDistance", config().anchorDistance,
+      "Distance before the earliest hit at which an anchored seed starts"};
+  ParameterRef<double> m_locError{this, "LocError", config().locError,
+                                  "Prior sigma of the seed's local position"};
+  ParameterRef<double> m_phiError{this, "PhiError", config().phiError,
+                                  "Prior sigma of the seed's phi"};
+  ParameterRef<double> m_thetaError{this, "ThetaError", config().thetaError,
+                                    "Prior sigma of the seed's theta"};
+  ParameterRef<double> m_qOverPError{this, "QOverPError", config().qOverPError,
+                                     "Prior sigma of the seed's q/p"};
 
   Service<ACTSGeo_service> m_ACTSGeoSvc{this};
   Service<AlgorithmsInit_service> m_algorithmsInit{this};
@@ -64,7 +81,11 @@ public:
   }
 
   void Process(int32_t /* run_number */, uint64_t /* event_number */) {
-    m_algo->process({m_headers_input(), m_particles_input()},
+    std::vector<gsl::not_null<const edm4hep::SimTrackerHitCollection*>> simhits;
+    for (const auto* hits : m_simhits_input()) {
+      simhits.emplace_back(hits);
+    }
+    m_algo->process({m_headers_input(), m_particles_input(), simhits},
                     {m_seeds_output().get(), m_parameters_output().get()});
   }
 };

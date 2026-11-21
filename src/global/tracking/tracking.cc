@@ -59,8 +59,11 @@ void InitPlugin(JApplication* app) {
 
   // Dedicated B0 truth seeder: relaxed vertex-z cut so that charged daughters of Lambda
   // decays at large z (up to ~O(meters)) are also seeded for the B0 tracker CKF.
+  // Each seed starts 10 mm before the particle's first B0 hit, with its momentum there and a
+  // tight prior: a loose prior propagated ~6 m from the vertex lets the first hit corrupt q/p
+  // and loses particles that scatter before the B0.
   app->Add(new JOmniFactoryGeneratorT<TrackParamTruthInit_factory>(
-      "B0TrackerTruthSeeds", {"EventHeader", "MCParticles"},
+      "B0TrackerTruthSeeds", {"EventHeader", "MCParticles", "B0TrackerHits"},
       {"B0TrackerTruthSeeds", "B0TrackerTruthSeedParameters"},
       TrackParamTruthInitConfig{
           .maxVertexX         = 240 * dd4hep::mm, // maxVertexZ * tan(40mrad) ~ 240mm
@@ -71,6 +74,12 @@ void InitPlugin(JApplication* app) {
           .maxEtaBackward     = 0.0, // forward-going particles only
           .momentumSmear      = 0.1,
           .useVertexAsPerigee = true, // anchor at decay vertex, not beam-axis PCA
+          .anchorAtFirstHit   = true,
+          .anchorDistance     = 10 * dd4hep::mm,
+          .locError           = 1 * dd4hep::mm,
+          .phiError           = 10 * dd4hep::mrad,
+          .thetaError         = 1 * dd4hep::mrad,
+          .qOverPError        = 0.01 / dd4hep::GeV,
       },
       app));
 
